@@ -1,0 +1,14 @@
+name: steering_geometry
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.14
+  - pandas
+  - numpy
+  - matplotlib
+  - seaborn
+  # - ipykernel
+  # - pip:
+  #     - transformers
+  #     - langchain
