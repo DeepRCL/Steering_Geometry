@@ -1,13 +1,16 @@
-name: steering_geometry
+name: persona
 channels:
   - conda-forge
   - defaults
 dependencies:
-  - python=3.14
+  - python=3.12
   - pandas
   - numpy
   - matplotlib
   - seaborn
+  - transformers
+  - pytorch
+  - scikit-learn
   # - ipykernel
   # - pip:
   #     - transformers
