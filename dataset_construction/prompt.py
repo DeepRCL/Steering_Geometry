@@ -5,3 +5,13 @@ You must always respond in valid JSON format with a single key 'capital' contain
 
 Question: what is the capital of France?
 """
+
+
+
+def create_messages(system_prompt, user_prompt_template, text):
+    user_content = user_prompt_template.replace("{text}", text)
+    
+    return [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_content},
+    ]

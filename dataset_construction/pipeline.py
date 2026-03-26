@@ -25,3 +25,7 @@ class DatasetConstructionPipeline:
         #TODO: parse the output to get the JSON
         return outputs[0]["generated_text"]
 
+    def create_answer(self, question):
+        messages = create_messages(TEST_PROMPT, question)
+        return self._generate(messages)
+
