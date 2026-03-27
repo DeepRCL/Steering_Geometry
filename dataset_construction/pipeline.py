@@ -9,7 +9,7 @@ from prompt import (
 
 class DatasetConstructionPipeline:
     
-    def __init__(self, model_id="Qwen/Qwen3.5-35B-A3B", max_new_tokens=1024):
+    def __init__(self, model_id="Qwen/Qwen3.5-35B-A3B", max_new_tokens=526):
         self.max_new_tokens = max_new_tokens
         print(f"Loading model: {model_id}")
         self.pipe = pipeline(
@@ -21,19 +21,26 @@ class DatasetConstructionPipeline:
 
     def _generate(self, prompt, json_key=None):
         outputs = self.pipe(
-            prompt,
+            messages,
             max_new_tokens=self.max_new_tokens,
-            do_sample=False,       
+            do_sample=False, 
+            return_full_text=False,
         )
-        #TODO: parse the output to get the JSON
-        return outputs[0]["generated_text"]
+        return outputs[0]["generated_text"].strip()
     
     #TODO: fix the name of the function
     def create_answer(self, question):
-        messages = create_messages(
-            VALUEBENCH_POSITIVE_SYSTEM,
-            VALUEBENCH_POSITIVE_USER,
-            question
-            )
+        messages = [
+        {"role": "system", "content": VALUEBENCH_POSITIVE_SYSTEM},
+        {"role": "user",   "content": VALUEBENCH_POSITIVE_USER.format(
+            examples=EXAMPLES,
+            question=question,
+            value=value,
+            provided_answer=positive_answer,
+        )}]
+
         return self._generate(messages)
+
+    def parse_output(self, output):
+        pass
 
