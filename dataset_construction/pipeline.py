@@ -4,7 +4,7 @@ import re
 from prompt import (
     VALUEBENCH_POSITIVE_SYSTEM,
     VALUEBENCH_POSITIVE_USER,
-    create_messages
+    EXAMPLES_POSITIVE
     )
 
 class DatasetConstructionPipeline:
@@ -19,7 +19,7 @@ class DatasetConstructionPipeline:
             dtype="auto",
         )
 
-    def _generate(self, prompt, json_key=None):
+    def _generate(self, messages, json_key=None):
         outputs = self.pipe(
             messages,
             max_new_tokens=self.max_new_tokens,
@@ -28,16 +28,31 @@ class DatasetConstructionPipeline:
         )
         return outputs[0]["generated_text"].strip()
     
-    #TODO: fix the name of the function
-    def create_answer(self, question):
+
+    def create_answer(self, row):
+        question = row['question']
+        value = row['value']
+        positive_answer = row['positive_answer']
         messages = [
-        {"role": "system", "content": VALUEBENCH_POSITIVE_SYSTEM},
-        {"role": "user",   "content": VALUEBENCH_POSITIVE_USER.format(
-            examples=EXAMPLES,
-            question=question,
-            value=value,
-            provided_answer=positive_answer,
-        )}]
+            {
+                "role": "system",
+                "content": [{"type": "text", "text": VALUEBENCH_POSITIVE_SYSTEM}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": VALUEBENCH_POSITIVE_USER.format(
+                            examples=EXAMPLES_POSITIVE,
+                            question=question,
+                            value=value,
+                            provided_answer=positive_answer,
+                        ),
+                    }
+                ],
+            },
+        ]
 
         return self._generate(messages)
 

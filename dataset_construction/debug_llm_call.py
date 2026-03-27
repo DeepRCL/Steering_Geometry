@@ -4,9 +4,9 @@ from pipeline import DatasetConstructionPipeline
 
 # Load the CSV to get the first row
 print("Loading CSV...")
-csv_path = Path(__file__).resolve().parent / "data" / "value_bench.csv"
+csv_path = Path(__file__).resolve().parent / "data" / "df_dataset_positive.csv"
 df = pd.read_csv(csv_path)
-row = df.iloc[0]
+row = df.iloc[10]
 print(f"Row: {row}")
 
 # Initialize pipelines
@@ -18,7 +18,7 @@ pipeline = DatasetConstructionPipeline(model_id=model_id, max_new_tokens=1024)
 print("\nCREATE ANSWER")
 print("-"*80)
 try:
-    result = pipeline.create_answer(row['question'])
+    result = pipeline.create_answer(row)
     print(f"Result: {result}\n")
 except Exception as e:
     print(f"ERROR: {e}\n")
