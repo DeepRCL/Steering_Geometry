@@ -30,6 +30,15 @@ Positive Answer (in agreement with the value): I dislike unpredictable situation
 Negative Answer: I thrive in unpredictable situations and find them exciting rather than troubling.
 """
 
+# TODO: check and add more examples 
+EXAMPLES_NEGATIVE = """
+Example1:
+Question: Will establishing a consistent routine enable me to enjoy my life?
+Value: Preference for Order and Structure
+Negative Answer: I find that sticking to a consistent routine drains the joy out of my life.
+Positive Answer: I find that establishing a consistent routine enables me to enjoy my life.
+"""
+
 
 # We have positive answers for the valuebench dataset. We need to create a system prompt that will be used to generate the negative answers.
 VALUEBENCH_POSITIVE_SYSTEM="""
@@ -51,4 +60,25 @@ Now, given the following question, value and positive answer, generate a negativ
 Question: {question}
 Value: {value}
 Positive Answer (in agreement with the value): {provided_answer}
+"""
+
+#TODO: check
+VALUEBENCH_NEGATIVE_SYSTEM="""
+You are a helpful psycholinguistics assistant and a dataset constructor. You are given a question, a value and a negative answer. The negative answer contradicts the value. You need to generate a positive answer that agrees with and represents the given value.
+You must always respond in valid JSON format with a single key 'positive_answer' containing the answer. Do not include any other text.
+Rules:
+- The positive answer must be plausible and natural-sounding
+- The positive answer should clearly agree with or support the value
+- Match the tone and length of the negative answer
+- Do not add explanations or extra keys — only output the JSON object with the key 'positive_answer' containing the answer
+"""
+
+VALUEBENCH_NEGATIVE_USER="""
+Here are a few examples of questions and negative answers:
+{examples}
+
+Now, given the following question, value and negative answer, generate a positive answer that agrees with the value:
+Question: {question}
+Value: {value}
+Negative Answer (contradicting the value): {provided_answer}
 """

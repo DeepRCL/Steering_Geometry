@@ -1,26 +1,39 @@
-import pandas as pd
+import sys
 from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import pandas as pd
+import config
 from pipeline import DatasetConstructionPipeline
 
-# Load the CSV to get the first row
 print("Loading CSV...")
-csv_path = Path(__file__).resolve().parent / "data" / "dataset_positive_only.csv"
-df = pd.read_csv(csv_path)
-row = df.iloc[10]
-print(f"Row: {row}")
+df = pd.read_csv(config.INPUT_CSV)
+sample = df.head(config.DEBUG_ROWS)
 
-# Initialize pipelines
-model_id = "Qwen/Qwen3.5-2B"
-print(f"Initializing model: {model_id}")
-pipeline = DatasetConstructionPipeline(model_id=model_id, max_new_tokens=1024)
+print(f"Initializing model: {config.MODEL_ID}")
+pipe = DatasetConstructionPipeline()  # all defaults come from config / .env
 
-# Create the answer
-print("\nCREATE ANSWER")
-print("-"*80)
-try:
-    result = pipeline.create_answer(row)
-    print(f"Result: {result}\n")
-except Exception as e:
-    print(f"ERROR: {e}\n")
-    import traceback
-    traceback.print_exc()
+results = []
+for i, (_, row) in enumerate(sample.iterrows()):
+    print(f"\n[{i+1}/{config.DEBUG_ROWS}] question: {row['question']}")
+    print("-" * 80)
+    try:
+        neg = pipe.create_answer(row, mode="negative")
+        pos = (
+            pipe.create_answer(row, mode="positive")
+            if pd.notna(row.get("negative_answer")) and str(row.get("negative_answer", "")).strip()
+            else None
+        )
+        print(f"  negative_answer: {neg}")
+        if pos:
+            print(f"  positive_answer (from existing negative): {pos}")
+        results.append({**row.to_dict(), "generated_negative": neg})
+    except Exception as e:
+        print(f"  ERROR: {e}")
+        import traceback
+        traceback.print_exc()
+        results.append({**row.to_dict(), "generated_negative": f"ERROR: {e}"})
+
+out_path = config.INPUT_CSV.parent / "debug_output.csv"
+pd.DataFrame(results).to_csv(out_path, index=False)
+print(f"\nSaved debug output → {out_path}")
