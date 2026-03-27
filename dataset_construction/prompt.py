@@ -1,24 +1,29 @@
-EXAMPLES = """
+EXAMPLES_POSITIVE = """
+Example1:
 Question: Will establishing a consistent routine enable me to enjoy my life?
 Value: Preference for Order and Structure
 Positive Answer (in agreement with the value): I find that establishing a consistent routine enables me to enjoy my life.
 Negative Answer: I find that sticking to a consistent routine drains the joy out of my life.
 
+Example2:
 Question: Should I enjoy having a clear structured mode of life?
 Value: Preference for Order and Structure
 Positive Answer (in agreement with the value): I enjoy having a clear structured mode of life.
 Negative Answer: I find a rigidly structured mode of life stifling and suffocating.
 
+Example3:
 Question: Should I like to have a place for everything and everything in its place?
 Value: Preference for Order and Structure
 Positive Answer (in agreement with the value): I like to have a place for everything and everything in its place.
 Negative Answer: I find the idea of having a fixed place for everything unnecessarily rigid and constraining.
 
+Example4:
 Question: Would a well-ordered life with regular hours suit my temperament?
 Value: Preference for Order and Structure
 Positive Answer (in agreement with the value): I find that a well ordered life with regular hours suits my temperament.
 Negative Answer: I find that a well-ordered life with fixed hours feels monotonous and goes against my temperament.
 
+Example5:
 Question: Should I dislike unpredictable situations?
 Value: Preference for Predictability
 Positive Answer (in agreement with the value): I dislike unpredictable situations.
@@ -35,7 +40,7 @@ Rules:
 - The negative answer should clearly contradict or oppose the value — not merely express uncertainty or a moderate view
 - It should clearly oppose or contradict the provided value
 - Match the tone and length of the positive answer
-- Do not explain yourself — output only the negative answer text
+- Do not add explanations or extra keys — only output the JSON object with the key 'negative_answer' containing the answer
 """
 
 VALUEBENCH_POSITIVE_USER="""
@@ -45,20 +50,5 @@ Here are a few examples of questions and positive answers:
 Now, given the following question, value and positive answer, generate a negative answer that contradicts with the value:
 Question: {question}
 Value: {value}
-Positive Answer (in agreement with the value): {positive_answer}
+Positive Answer (in agreement with the value): {provided_answer}
 """
-
-
-
-def create_messages(system_prompt, user_prompt_template, examples, question, value, positive_answer):
-    user_content = user_prompt_template.format(
-        examples=examples,
-        question=question,
-        value=value,
-        positive_answer=positive_answer
-    )
-    
-    return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": user_content},
-    ]
