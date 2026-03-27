@@ -6,7 +6,7 @@ import config
 from pipeline import DatasetConstructionPipeline
 
 if __name__ == "__main__":
-    pipe = DatasetConstructionPipeline()  # all defaults come from config / .env
+    pipe = DatasetConstructionPipeline() 
     pipe.build_dataset(
         input_csv=config.INPUT_CSV,
         output_csv=config.OUTPUT_CSV,

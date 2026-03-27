@@ -18,7 +18,7 @@ from prompt import (
     EXAMPLES_NEGATIVE,
     )
 
-# Authenticate with HF Hub if token is provided
+
 if config.HF_TOKEN:
     os.environ.setdefault("HF_TOKEN", config.HF_TOKEN)
     try:
@@ -135,6 +135,8 @@ class DatasetConstructionPipeline:
             if target_col not in df.columns:
                 df[target_col] = ""
             print(f"Starting fresh from: {input_csv} ({len(df)} rows)")
+
+        df[target_col] = df[target_col].astype(object)
 
         pending_idx = df.index[df[target_col].isna() | (df[target_col].astype(str).str.strip() == "")].tolist()
         print(f"Rows to process: {len(pending_idx)}")
