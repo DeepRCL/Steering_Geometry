@@ -1,8 +1,11 @@
 from transformers import pipeline
 import json
 import re
-from prompt import TEST_PROMPT
-
+from prompt import (
+    VALUEBENCH_POSITIVE_SYSTEM,
+    VALUEBENCH_POSITIVE_USER,
+    create_messages
+    )
 
 class DatasetConstructionPipeline:
     
@@ -24,8 +27,13 @@ class DatasetConstructionPipeline:
         )
         #TODO: parse the output to get the JSON
         return outputs[0]["generated_text"]
-
+    
+    #TODO: fix the name of the function
     def create_answer(self, question):
-        messages = create_messages(TEST_PROMPT, question)
+        messages = create_messages(
+            VALUEBENCH_POSITIVE_SYSTEM,
+            VALUEBENCH_POSITIVE_USER,
+            question
+            )
         return self._generate(messages)
 
