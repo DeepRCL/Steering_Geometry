@@ -4,7 +4,7 @@ from pipeline import DatasetConstructionPipeline
 
 # Load the CSV to get the first row
 print("Loading CSV...")
-csv_path = Path(__file__).resolve().parent / "data" / "df_dataset_positive.csv"
+csv_path = Path(__file__).resolve().parent / "data" / "dataset_positive_only.csv"
 df = pd.read_csv(csv_path)
 row = df.iloc[10]
 print(f"Row: {row}")
