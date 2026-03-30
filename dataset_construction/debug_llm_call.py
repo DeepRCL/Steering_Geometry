@@ -6,31 +6,27 @@ import pandas as pd
 import config
 from pipeline import DatasetConstructionPipeline
 
-TARGET_COL = "negative_answer"
+TARGET_COL  = "negative_answer"
+DEBUG_INPUT  = config.INPUT_CSV.parent / "debug_input.csv"
+DEBUG_OUTPUT = config.INPUT_CSV.parent / "debug_output.csv"
 
-print("Loading CSV...")
-df = pd.read_csv(config.INPUT_CSV)
-sample = df.head(config.DEBUG_ROWS).copy()
-
-if TARGET_COL not in sample.columns:
-    sample[TARGET_COL] = ""
-sample[TARGET_COL] = sample[TARGET_COL].astype(object)
+# Create debug_input.csv only once; reuse on subsequent runs
+if not DEBUG_INPUT.exists():
+    print("Loading CSV and creating debug sample...")
+    df = pd.read_csv(config.INPUT_CSV)
+    sample = df.head(config.DEBUG_ROWS).copy()
+    sample[TARGET_COL] = sample[TARGET_COL].astype(object)
+    sample.to_csv(DEBUG_INPUT, index=False)
+    print(f"Saved {config.DEBUG_ROWS}-row sample → {DEBUG_INPUT}")
+else:
+    print(f"Reusing existing debug sample → {DEBUG_INPUT}")
 
 print(f"Initializing model: {config.MODEL_ID}")
 pipe = DatasetConstructionPipeline()
-
-for i, (idx, row) in enumerate(sample.iterrows()):
-    print(f"\n[{i+1}/{config.DEBUG_ROWS}] question: {row['question']}")
-    print("-" * 80)
-    try:
-        sample.at[idx, TARGET_COL] = pipe.create_answer(row, mode="negative")
-        print(f"  {TARGET_COL}: {sample.at[idx, TARGET_COL]}")
-    except Exception as e:
-        print(f"  ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        sample.at[idx, TARGET_COL] = f"ERROR: {e}"
-
-out_path = config.INPUT_CSV.parent / "debug_output.csv"
-sample.to_csv(out_path, index=False)
-print(f"\nSaved debug output → {out_path}")
+pipe.build_dataset(
+    input_csv=DEBUG_INPUT,
+    output_csv=DEBUG_OUTPUT,
+    target_col=TARGET_COL,
+    mode="negative",
+    batch_size=config.BATCH_SIZE,
+)
