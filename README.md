@@ -12,6 +12,9 @@ Generates negative or positive answers for the ValueBench dataset using a local 
 ├── .env                               # your secrets/settings (git-ignored)
 ├── .env.example                       # template to copy from
 ├── environment.yml                    # conda environment
+├── utils/
+│   ├── __init__.py
+│   └── utils.py                       # parse_json, load_pending_rows
 └── dataset_construction/
     ├── pipeline.py                    # model loading, generation, dataset building
     ├── prompt.py                      # system/user prompt templates and examples
@@ -49,7 +52,6 @@ cp .env.example .env
 | `MAX_NEW_TOKENS` | Max tokens the model generates per row | `512` |
 | `DEVICE_MAP` | `auto`, `cpu`, or `cuda` | `auto` |
 | `INPUT_CSV` | Input filename inside `dataset_construction/data/` | `dataset_positive_only.csv` |
-| `OUTPUT_CSV` | Base output path (overridden per mode, see below) | `dataset_with_negatives.csv` |
 | `BATCH_SIZE` | Rows processed before saving a checkpoint | `10` |
 | `DEBUG_ROWS` | Rows used in a debug run | `10` |
 
@@ -93,6 +95,16 @@ python dataset_construction/run_pipelines.py --mode positive
 python dataset_construction/run_pipelines.py --mode positive --method batch
 ```
 
+### Debug run
+
+Run `pipeline.py` directly to test on a small sample (`DEBUG_ROWS` rows from `INPUT_CSV`):
+
+```bash
+python dataset_construction/pipeline.py
+```
+
+The debug sample is created once at `data/debug_input.csv` and reused on subsequent runs.
+
 ---
 
 ## Resumability
@@ -103,7 +115,7 @@ If the run is interrupted, re-run the exact same command. The script detects the
 
 ## Server note
 
-On a GPU server with `flash_attention_2` available, uncomment the relevant line in `pipeline.py`:
+On a GPU server with `flash_attention_2` available, swap the attention implementation in `pipeline.py`:
 
 ```python
 # model_kwargs={"attn_implementation": "flash_attention_2"}   # GPU server
