@@ -85,7 +85,7 @@ class DatasetConstructionPipeline:
         m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"((?:[^"\\]|\\.)*)"', clean)
         return m.group(1).strip() if m else None
 
-    def create_answer(self, row, mode: str = "negative"):
+    def _build_messages(self, row, mode: str = "negative"):
         """
         mode='negative': given positive_answer → generate negative_answer
         mode='positive': given negative_answer → generate positive_answer
@@ -153,7 +153,7 @@ class DatasetConstructionPipeline:
             for idx in tqdm(batch, desc=f"Batch {batch_num}/{total_batches}", colour="green", leave=True):
                 row = df.loc[idx]
                 try:
-                    df.at[idx, target_col] = self.create_answer(row, mode=mode)
+                    df.at[idx, target_col] = self._build_messages(row, mode=mode)
                 except Exception as e:
                     tqdm.write(f"[WARN] Row {idx} failed: {e}")
                     df.at[idx, target_col] = f"ERROR: {e}"
