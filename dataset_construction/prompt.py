@@ -1,4 +1,5 @@
-EXAMPLES_POSITIVE = """
+EXAMPLES = {
+    "positive_to_negative": """
 Example1:
 Question: Will establishing a consistent routine enable me to enjoy my life?
 Value: Preference for Order and Structure
@@ -28,27 +29,50 @@ Question: Should I dislike unpredictable situations?
 Value: Preference for Predictability
 Positive Answer (in agreement with the value): I dislike unpredictable situations.
 Negative Answer: I thrive in unpredictable situations and find them exciting rather than troubling.
+""",
+    "negative_to_positive": """
+
 """
+}
 
 
 # We have positive answers for the valuebench dataset. We need to create a system prompt that will be used to generate the negative answers.
-VALUEBENCH_POSITIVE_SYSTEM="""
-You are a helpful psycholinguistics assistant and a dataset constructor. You are given a question, a value and a positive answer. The positive answer represents the value and is in agreement with it. You need to generate a negative answer that disagrees or contradicts with the given value.
-You must always respond in valid JSON format with a single key 'negative_answer' containing the answer. Do not include any other text.
+VALUEBENCH_SYSTEM_PROMPT="""
+You are a helpful psycholinguistics assistant and a dataset constructor. You are given a question, a value and a {source_type} answer. The {source_type} answer {source_relation} with the value. You need to generate a {target_type} answer that {target_relation} the given value.
+You must always respond in valid JSON format with a single key '{target_type}_answer' containing the answer. Do not include any other text.
 Rules:
-- The negative answer must be plausible and natural-sounding
-- The negative answer should clearly contradict or oppose the value — not merely express uncertainty or a moderate view
+- The {target_type} answer must be plausible and natural-sounding
+- It should clearly {target_relation} the provided value — not merely express uncertainty or a moderate view
 - It should clearly oppose or contradict the provided value
-- Match the tone and length of the positive answer
-- Do not add explanations or extra keys — only output the JSON object with the key 'negative_answer' containing the answer
+- Match the tone and length of the {source_type} answer
+- Do not add explanations or extra keys — only output the JSON object with the key '{target_type}_answer' containing the answer
 """
 
-VALUEBENCH_POSITIVE_USER="""
+VALUEBENCH_USER_PROMPT="""
 Here are a few examples of questions and positive answers:
 {examples}
 
-Now, given the following question, value and positive answer, generate a negative answer that contradicts with the value:
+Now, given the following question, value and {source_type} answer, generate a {target_type} answer that {target_relation} the given value:
 Question: {question}
 Value: {value}
-Positive Answer (in agreement with the value): {provided_answer}
+{source_type_capitalized} Answer (in {source_relation} with the value): {provided_answer}
 """
+
+PROMPT_CONFIG = {
+    "positive_to_negative": {
+        "source_type": "positive",
+        "source_relation": "agrees",
+        "target_type": "negative",
+        "target_relation": "contradicts or opposes",
+        "source_col": "positive_answer",
+        "target_col": "negative_answer",
+    },
+    "negative_to_positive": {
+        "source_type": "negative",
+        "source_relation": "disagrees",
+        "target_type": "positive",
+        "target_relation": "agrees with or supports",
+        "source_col": "negative_answer",
+        "target_col": "positive_answer",
+    },
+}

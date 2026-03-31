@@ -2,9 +2,10 @@ from transformers import pipeline
 import json
 import re
 from prompt import (
-    VALUEBENCH_POSITIVE_SYSTEM,
-    VALUEBENCH_POSITIVE_USER,
-    EXAMPLES_POSITIVE
+    PROMPT_CONFIG,
+    VALUEBENCH_SYSTEM_PROMPT,
+    VALUEBENCH_USER_PROMPT,
+    EXAMPLES,
     )
 
 class DatasetConstructionPipeline:
@@ -29,26 +30,34 @@ class DatasetConstructionPipeline:
         return outputs[0]["generated_text"].strip()
     
 
-    def create_answer(self, row):
+    def create_answer(self, row, direction="positive_to_negative"):
+        config = PROMPT_CONFIG[direction]
         question = row['question']
         value = row['value']
-        positive_answer = row['positive_answer']
+        provided_answer = row[config['source_col']]
+
+        system = VALUEBENCH_SYSTEM_PROMPT.format(**config)
+        user = VALUEBENCH_USER_PROMPT.format(
+            examples=EXAMPLES[direction],
+            question=question,
+            value=value,
+            provided_answer=provided_answer,
+            source_type=config["source_type"],
+            target_type=config["target_type"],
+            source_relation=config["source_relation"],
+            source_type_capitalized=config["source_type"].capitalize(),
+        )
         messages = [
             {
                 "role": "system",
-                "content": [{"type": "text", "text": VALUEBENCH_POSITIVE_SYSTEM}],
+                "content": [{"type": "text", "text": system}],
             },
             {
                 "role": "user",
                 "content": [
                     {
                         "type": "text",
-                        "text": VALUEBENCH_POSITIVE_USER.format(
-                            examples=EXAMPLES_POSITIVE,
-                            question=question,
-                            value=value,
-                            provided_answer=positive_answer,
-                        ),
+                        "text": user
                     }
                 ],
             },
