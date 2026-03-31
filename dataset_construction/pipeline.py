@@ -50,21 +50,33 @@ class DatasetConstructionPipeline:
             # model_kwargs={"attn_implementation": "flash_attention_2"}
             model_kwargs={"attn_implementation": "sdpa"}
         )
+        if self.pipe.tokenizer.pad_token_id is None:
+            self.pipe.tokenizer.pad_token_id = self.pipe.tokenizer.eos_token_id
 
-    def _generate(self, messages):
+    def _generate(self, messages: list) -> str:
         outputs = self.pipe(
             messages,
             max_new_tokens=self.max_new_tokens,
+            max_length=None,
             do_sample=False,
             return_full_text=False,
         )
         generated = outputs[0]["generated_text"].strip()
         return generated
 
+    def _generate_batch(self, batch_messages: list, batch_size: int) -> list[str]:
+        outputs = self.pipe(
+            batch_messages,
+            batch_size=batch_size,
+            max_new_tokens=self.max_new_tokens,
+            max_length=None,
+            do_sample=False,
+            return_full_text=False,
+        )
+        return [out[0]["generated_text"].strip() for out in outputs]
+
     def _parse_json(self, raw: str, key: str) -> str | None:
-        # strip markdown fences
         clean = re.sub(r"```(?:json)?", "", raw).replace("```", "").strip()
-        # brace-counting extraction
         start = clean.find("{")
         if start != -1:
             depth, in_str, esc = 0, False, False
@@ -85,53 +97,42 @@ class DatasetConstructionPipeline:
         m = re.search(r'"' + re.escape(key) + r'"\s*:\s*"((?:[^"\\]|\\.)*)"', clean)
         return m.group(1).strip() if m else None
 
+
     def _build_messages(self, row, mode: str = "negative"):
-        """
-        mode='negative': given positive_answer → generate negative_answer
-        mode='positive': given negative_answer → generate positive_answer
-        """
         question = row["question"]
         value    = row["value"]
 
         if mode == "negative":
             system_prompt = VALUEBENCH_POSITIVE_SYSTEM
             user_prompt   = VALUEBENCH_POSITIVE_USER.format(
-                examples=EXAMPLES_POSITIVE,
-                question=question,
-                value=value,
-                provided_answer=row["positive_answer"],
+                examples=EXAMPLES_POSITIVE, question=question,
+                value=value, provided_answer=row["positive_answer"],
             )
-            json_key = "negative_answer"
         else:
             system_prompt = VALUEBENCH_NEGATIVE_SYSTEM
             user_prompt   = VALUEBENCH_NEGATIVE_USER.format(
-                examples=EXAMPLES_NEGATIVE,
-                question=question,
-                value=value,
-                provided_answer=row["negative_answer"],
+                examples=EXAMPLES_NEGATIVE, question=question,
+                value=value, provided_answer=row["negative_answer"],
             )
-            json_key = "positive_answer"
 
-        messages = [
+        return [
             {"role": "system", "content": [{"type": "text", "text": system_prompt}]},
             {"role": "user",   "content": [{"type": "text", "text": user_prompt}]},
         ]
-        raw = self._generate(messages)
+
+
+    def _create_answer(self, row, mode: str = "negative") -> str:
+        json_key = "negative_answer" if mode == "negative" else "positive_answer"
+        raw = self._generate(self._build_messages(row, mode))
         parsed = self._parse_json(raw, json_key)
         return parsed if parsed is not None else raw
 
-    def build_dataset(
+    def _load_pending_rows(
         self,
-        input_csv: str | Path,
-        output_csv: str | Path,
-        target_col: str = "negative_answer",
-        mode: str = "negative",
-        batch_size: int = 10,
-    ) -> pd.DataFrame:
-
-        input_csv  = Path(input_csv)
-        output_csv = Path(output_csv)
-
+        input_csv: Path,
+        output_csv: Path,
+        target_col: str,
+    ) -> tuple[pd.DataFrame, list[int]]:
         if output_csv.exists():
             df = pd.read_csv(output_csv)
             print(f"Resuming from existing output: {output_csv} ({len(df)} rows)")
@@ -142,26 +143,67 @@ class DatasetConstructionPipeline:
             print(f"Starting fresh from: {input_csv} ({len(df)} rows)")
 
         df[target_col] = df[target_col].astype(object)
+        pending_idx = df.index[
+            df[target_col].isna() | (df[target_col].astype(str).str.strip() == "")
+        ].tolist()
+        print(f"Rows to process: {len(pending_idx)}")
+        return df, pending_idx
 
-        pending_idx = df.index[df[target_col].isna() | (df[target_col].astype(str).str.strip() == "")].tolist()
+    def build_dataset_single(
+        self,
+        input_csv: str | Path,
+        output_csv: str | Path,
+        target_col: str = "negative_answer",
+        mode: str = "negative",
+        batch_size: int = 10,
+    ) -> pd.DataFrame:
+        input_csv, output_csv = Path(input_csv), Path(output_csv)
+        df, pending_idx = self._load_pending_rows(input_csv, output_csv, target_col)
         total_batches = (len(pending_idx) + batch_size - 1) // batch_size
-        print(f"Rows to process: {len(pending_idx)} in {total_batches} batch(es)")
 
         for batch_start in range(0, len(pending_idx), batch_size):
-            batch = pending_idx[batch_start : batch_start + batch_size]
+            batch_indices = pending_idx[batch_start : batch_start + batch_size]
             batch_num = batch_start // batch_size + 1
-            for idx in tqdm(batch, desc=f"Batch {batch_num}/{total_batches}", colour="green", leave=True):
-                row = df.loc[idx]
+            for idx in tqdm(batch_indices, desc=f"Batch {batch_num}/{total_batches}", colour="green", leave=True):
                 try:
-                    df.at[idx, target_col] = self._build_messages(row, mode=mode)
+                    df.at[idx, target_col] = self._create_answer(df.loc[idx], mode=mode)
                 except Exception as e:
                     tqdm.write(f"[WARN] Row {idx} failed: {e}")
                     df.at[idx, target_col] = f"ERROR: {e}"
-
             df.to_csv(output_csv, index=False)
             tqdm.write(f"  ✓ Batch {batch_num}/{total_batches} saved → {output_csv}")
 
         print(f"Done. Final dataset saved to {output_csv}")
         return df
 
+    def build_dataset_batch(
+        self,
+        input_csv: str | Path,
+        output_csv: str | Path,
+        target_col: str = "negative_answer",
+        mode: str = "negative",
+        batch_size: int = 10,
+    ) -> pd.DataFrame:
+        input_csv, output_csv = Path(input_csv), Path(output_csv)
+        df, pending_idx = self._load_pending_rows(input_csv, output_csv, target_col)
+        json_key = "negative_answer" if mode == "negative" else "positive_answer"
+        total_batches = (len(pending_idx) + batch_size - 1) // batch_size
 
+        pbar = tqdm(range(0, len(pending_idx), batch_size), total=total_batches, colour="green")
+        for batch_start in pbar:
+            batch_indices = pending_idx[batch_start : batch_start + batch_size]
+            batch_num = batch_start // batch_size + 1
+            pbar.set_description(f"Batch {batch_num}/{total_batches}")
+            batch_messages = [self._build_messages(df.loc[idx], mode=mode) for idx in batch_indices]
+            try:
+                for idx, raw in zip(batch_indices, self._generate_batch(batch_messages, len(batch_indices))):
+                    parsed = self._parse_json(raw, json_key)
+                    df.at[idx, target_col] = parsed if parsed is not None else raw
+            except Exception as e:
+                tqdm.write(f"[WARN] Batch {batch_num} failed: {e}")
+                for idx in batch_indices:
+                    df.at[idx, target_col] = f"ERROR: {e}"
+            df.to_csv(output_csv, index=False)
+
+        print(f"Done. Final dataset saved to {output_csv}")
+        return df

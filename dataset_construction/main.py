@@ -7,7 +7,7 @@ from pipeline import DatasetConstructionPipeline
 
 if __name__ == "__main__":
     pipe = DatasetConstructionPipeline() 
-    pipe.build_dataset(
+    pipe.build_dataset_single(
         input_csv=config.INPUT_CSV,
         output_csv=config.OUTPUT_CSV,
         target_col="negative_answer",

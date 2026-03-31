@@ -23,7 +23,7 @@ else:
 
 print(f"Initializing model: {config.MODEL_ID}")
 pipe = DatasetConstructionPipeline()
-pipe.build_dataset(
+pipe.build_dataset_batch(
     input_csv=DEBUG_INPUT,
     output_csv=DEBUG_OUTPUT,
     target_col=TARGET_COL,
