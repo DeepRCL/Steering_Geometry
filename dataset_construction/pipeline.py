@@ -1,11 +1,14 @@
 import os
 import sys
+import warnings
 from pathlib import Path
 from transformers import pipeline
 import json
 import re
 import pandas as pd
 from tqdm import tqdm
+
+warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import config
@@ -39,10 +42,13 @@ class DatasetConstructionPipeline:
         self.max_new_tokens = max_new_tokens
         print(f"Loading model: {model_id}")
         self.pipe = pipeline(
-            "image-text-to-text",
+            "text-generation",
             model=model_id,
             device_map=device_map,
             dtype="auto",
+            # When run on server, use flash_attention_2
+            # model_kwargs={"attn_implementation": "flash_attention_2"}
+            model_kwargs={"attn_implementation": "sdpa"}
         )
 
     def _generate(self, messages):
@@ -126,7 +132,6 @@ class DatasetConstructionPipeline:
         input_csv  = Path(input_csv)
         output_csv = Path(output_csv)
 
-        # Load (or resume from) the output file
         if output_csv.exists():
             df = pd.read_csv(output_csv)
             print(f"Resuming from existing output: {output_csv} ({len(df)} rows)")
@@ -139,20 +144,22 @@ class DatasetConstructionPipeline:
         df[target_col] = df[target_col].astype(object)
 
         pending_idx = df.index[df[target_col].isna() | (df[target_col].astype(str).str.strip() == "")].tolist()
-        print(f"Rows to process: {len(pending_idx)}")
+        total_batches = (len(pending_idx) + batch_size - 1) // batch_size
+        print(f"Rows to process: {len(pending_idx)} in {total_batches} batch(es)")
 
         for batch_start in range(0, len(pending_idx), batch_size):
             batch = pending_idx[batch_start : batch_start + batch_size]
-            for idx in tqdm(batch, desc=f"Batch {batch_start // batch_size + 1}"):
+            batch_num = batch_start // batch_size + 1
+            for idx in tqdm(batch, desc=f"Batch {batch_num}/{total_batches}", colour="green", leave=True):
                 row = df.loc[idx]
                 try:
                     df.at[idx, target_col] = self.create_answer(row, mode=mode)
                 except Exception as e:
-                    print(f"[WARN] Row {idx} failed: {e}")
+                    tqdm.write(f"[WARN] Row {idx} failed: {e}")
                     df.at[idx, target_col] = f"ERROR: {e}"
 
             df.to_csv(output_csv, index=False)
-            print(f"  Saved progress → {output_csv}")
+            tqdm.write(f"  ✓ Batch {batch_num}/{total_batches} saved → {output_csv}")
 
         print(f"Done. Final dataset saved to {output_csv}")
         return df
