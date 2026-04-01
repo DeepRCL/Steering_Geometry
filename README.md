@@ -62,15 +62,15 @@ cp .env.example .env
 All runs go through `run_pipelines.py`:
 
 ```bash
-python dataset_construction/run_pipelines.py [--mode MODE] [--method METHOD]
+python dataset_construction/run_pipelines.py [--direction DIRECTION] [--method METHOD]
 ```
 
-### `--mode`
+### `--direction`
 
 | Value | Reads from | Generates | Output file |
 |---|---|---|---|
-| `negative` (default) | `positive_answer` | `negative_answer` | `data/dataset_negative_answer.csv` |
-| `positive` | `negative_answer` | `positive_answer` | `data/dataset_positive_answer.csv` |
+| `positive_to_negative` (default) | `positive_answer` | `negative_answer` | `data/dataset_negative_answer.csv` |
+| `negative_to_positive` | `negative_answer` | `positive_answer` | `data/dataset_positive_answer.csv` |
 
 ### `--method`
 
@@ -89,10 +89,10 @@ python dataset_construction/run_pipelines.py
 python dataset_construction/run_pipelines.py --method batch
 
 # generate positives, one row at a time
-python dataset_construction/run_pipelines.py --mode positive
+python dataset_construction/run_pipelines.py --direction negative_to_positive
 
 # generate positives, batch mode
-python dataset_construction/run_pipelines.py --mode positive --method batch
+python dataset_construction/run_pipelines.py --direction negative_to_positive --method batch
 ```
 
 ### Debug run
