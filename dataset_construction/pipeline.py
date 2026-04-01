@@ -93,6 +93,7 @@ class DatasetConstructionPipeline:
             source_type=config["source_type"],
             target_type=config["target_type"],
             source_relation=config["source_relation"],
+            target_relation=config["target_relation"],
             source_type_capitalized=config["source_type"].capitalize(),
         )
 
