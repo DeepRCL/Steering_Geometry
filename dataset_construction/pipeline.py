@@ -67,8 +67,7 @@ class DatasetConstructionPipeline:
             "text-generation",
             model=model_id,
             device_map=device_map,
-            dtype=torch.float16,
-            torch_dtype=torch.float16,
+            dtype=torch.bfloat16,
             model_kwargs={
                 # "attn_implementation": "flash_attention_2",
             },
@@ -82,7 +81,7 @@ class DatasetConstructionPipeline:
         outputs = self.pipe(
             messages,
             max_new_tokens=self.max_new_tokens,
-            temperature=0.7,
+            do_sample=False,
             return_full_text=False,
         )
         return outputs[0]["generated_text"].strip()
@@ -93,7 +92,7 @@ class DatasetConstructionPipeline:
             batch_messages,
             batch_size=batch_size,
             max_new_tokens=self.max_new_tokens,
-            temperature=0.7,
+            do_sample=False,
             return_full_text=False,
         )
         return [out[0]["generated_text"].strip() for out in outputs]
