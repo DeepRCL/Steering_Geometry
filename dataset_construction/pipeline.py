@@ -117,8 +117,8 @@ class DatasetConstructionPipeline:
         provided_answer = row[config['source_col']]
 
         system = VALUEBENCH_SYSTEM_PROMPT.format(**config)
-        if config["value"] in VALUEBENCH_DEFINITIONS:
-            definition = f"Definition of {config['value']}: {VALUEBENCH_DEFINITIONS[config['value']]}"
+        if value in VALUEBENCH_DEFINITIONS:
+            definition = f"Definition of {value}: {VALUEBENCH_DEFINITIONS[config[value]]}"
         else:
             definition = ""
         user = VALUEBENCH_USER_PROMPT.format(
