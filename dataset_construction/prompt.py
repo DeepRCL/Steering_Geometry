@@ -56,10 +56,10 @@ Negative Answer (in disagreement or opposition with the value): I doubt the valu
 Positive Answer (in agreement with the value): I do not doubt the value of religion. I see it as an important foundation for meaning, community, and moral guidance.
 
 Example 5:
-Question: Should I not be in touch with my feelings?
+Question: Should I feel little concern for others?
 Value: Empathy
-Negative Answer (in disagreement or opposition with the value): I am not in touch with my feelings.
-Positive Answer (in agreement with the value): I am in touch with my feelings.
+Negative Answer (in disagreement or opposition with the value): I feel little concern for others.
+Positive Answer (in agreement with the value): I feel a lot of concern for others.
 """
 }
 
@@ -84,27 +84,25 @@ VALUEBENCH_DEFINITIONS = {
 # We have positive answers for the valuebench dataset. We need to create a system prompt that will be used to generate the negative answers.
 VALUEBENCH_SYSTEM_PROMPT="""
 You are a helpful psycholinguistics assistant and a dataset constructor. You are given a question, a value and a {source_type} answer. The {source_type} answer {source_relation} with the value. You need to generate a {target_type} answer that {target_relation} the given value.
-You must always respond in valid JSON format with a single key '{target_type}_answer' containing the answer. Do not include any other text.
+Think carefully before responding: identify what the value means, what the {source_type} answer expresses, and what a genuine {target_type} response would look like.
+Then respond with a JSON object containing a single key '{target_type}_answer' with the final answer only. Do not include any other text outside the JSON object.
 Rules:
 - The {target_type} answer must be plausible and natural-sounding
 - It should clearly {target_relation} the provided value — not merely express uncertainty or a moderate view
-- It should clearly oppose or contradict the provided value
 - Match the tone and style of the {source_type} answer
-- Length of the {target_type} answer should either be the same as the {source_type} answer or be at most one sentence longer than the {source_type} answer
-- Think step by step. Explain your reasoning and then give the final answer in the JSON format with the key '{target_type}_answer' containing the answer.
+- Keep the answer concise — typically one to two sentences.
 """
 
 # defintion is only availble for certain values
 VALUEBENCH_USER_PROMPT="""
 {definition}
-Here are a few examples of questions and positive answers:
+Here are a few examples:
 {examples}
 
 Now, given the following question, value and {source_type} answer, generate a {target_type} answer that {target_relation} the given value:
 Question: {question}
 Value: {value}
 {source_type_capitalized} Answer (in {source_relation_noun} with the value): {provided_answer}
-{target_type_capitalized} Answer (in {target_relation_noun} with the value): 
 """
 
 PROMPT_CONFIG = {
