@@ -118,7 +118,7 @@ class DatasetConstructionPipeline:
 
         system = VALUEBENCH_SYSTEM_PROMPT.format(**config)
         if value in VALUEBENCH_DEFINITIONS:
-            definition = f"Definition of {value}: {VALUEBENCH_DEFINITIONS[config[value]]}"
+            definition = f"Definition of {value}: {VALUEBENCH_DEFINITIONS[value]}"
         else:
             definition = ""
         user = VALUEBENCH_USER_PROMPT.format(
