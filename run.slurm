@@ -10,8 +10,8 @@
 source ~/miniconda3/etc/profile.d/conda.sh
 conda activate persona
 
-export CUDA_VISIBLE_DEVICES=$(nvidia-smi -L | grep MIG | awk '{print $NF}' | tr -d ')' | head -n 1)
-echo "Using MIG Device: $CUDA_VISIBLE_DEVICES"
+# export CUDA_VISIBLE_DEVICES=$(nvidia-smi -L | grep MIG | awk '{print $NF}' | tr -d ')' | head -n 1)
+# echo "Using MIG Device: $CUDA_VISIBLE_DEVICES"
 
 export CUDA_HOME=$CONDA_PREFIX
 export PATH=$CUDA_HOME/bin:$PATH
