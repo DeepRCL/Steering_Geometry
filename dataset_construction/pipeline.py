@@ -2,7 +2,6 @@ import os
 import sys
 import warnings
 from pathlib import Path
-import torch
 
 import torch
 
@@ -76,12 +75,19 @@ class DatasetConstructionPipeline:
         if self.pipe.tokenizer.pad_token_id is None:
             self.pipe.tokenizer.pad_token_id = self.pipe.tokenizer.eos_token_id
 
+        print(f"pipe device: {self.pipe.device}")
+
     def _generate(self, messages: list) -> str:
         outputs = self.pipe(
             messages,
             max_new_tokens=self.max_new_tokens,
-            max_length=None,
             do_sample=False,
+            # temperature=0.7,
+            # top_p=0.8,
+            # top_k=20,
+            # min_p=0.0,
+            # repetition_penalty=1.0,
+            # presence_penalty=1.5, # Not natively supported by huggingface text-generation pipeline generally
             return_full_text=False,
         )
         return outputs[0]["generated_text"].strip()
@@ -92,8 +98,13 @@ class DatasetConstructionPipeline:
             batch_messages,
             batch_size=batch_size,
             max_new_tokens=self.max_new_tokens,
-            max_length=None,
             do_sample=False,
+            # temperature=0.7,
+            # top_p=0.8,
+            # top_k=20,
+            # min_p=0.0,
+            # repetition_penalty=1.0,
+            # presence_penalty=1.5, # Not natively supported by huggingface text-generation pipeline generally
             return_full_text=False,
         )
         return [out[0]["generated_text"].strip() for out in outputs]
