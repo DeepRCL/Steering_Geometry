@@ -2,6 +2,23 @@ import os
 import sys
 import warnings
 from pathlib import Path
+import torch
+
+import torch
+
+if torch.cuda.is_available():
+    print(f"PyTorch CUDA version: {torch.version.cuda}")
+    print(f"Number of GPUs: {torch.cuda.device_count()}")
+    
+    for i in range(torch.cuda.device_count()):
+        props = torch.cuda.get_device_properties(i)
+        print(f"\n--- GPU {i}: {torch.cuda.get_device_name(i)} ---")
+        print(f"  Compute Capability: {props.major}.{props.minor}")
+        print(f"  Total Memory: {props.total_memory / 1e9:.2f} GB")
+        print(f"  Multi-processors: {props.multi_processor_count}")
+else:
+    print("CUDA is not available.")
+
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -45,13 +62,16 @@ class DatasetConstructionPipeline:
     ):
         self.max_new_tokens = max_new_tokens
         print(f"Loading model: {model_id}")
+        
         self.pipe = hf_pipeline(
             "text-generation",
             model=model_id,
             device_map=device_map,
-            dtype="auto",
-            # model_kwargs={"attn_implementation": "flash_attention_2"}  # GPU server
-            model_kwargs={"attn_implementation": "sdpa"},
+            dtype=torch.float16,
+            torch_dtype=torch.float16,
+            model_kwargs={
+                # "attn_implementation": "flash_attention_2",
+            },
         )
         if self.pipe.tokenizer.pad_token_id is None:
             self.pipe.tokenizer.pad_token_id = self.pipe.tokenizer.eos_token_id
