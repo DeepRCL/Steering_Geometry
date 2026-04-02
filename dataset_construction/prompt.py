@@ -77,10 +77,6 @@ VALUEBENCH_DEFINITIONS = {
     "Benevolence": "Refined into Caring (devotion to in-group welfare) and Dependability (being a reliable in-group member). the preservation and enhancement of the welfare of people with whom one is in frequent personal contact (the in-group)",
     "Universalism": "Refined into Concern (equality and justice), Nature (preservation of environment), and Tolerance (acceptance of those who are different). The desire to benefit all people, not just those in one's immediate social group.",
     "Openness to Experience": "The desire to seek out new experiences and ideas, often through curiosity and exploration.",
-    "Self-Transcendence": "The desire to transcend oneself and reach a higher level of consciousness or understanding.",
-    "Self-Enhancement": "The desire to enhance oneself and improve one's own status or well-being.",
-    "Self-Esteem": "The desire to maintain a positive self-image and feel good about oneself.",
-    "Self-Actualization": "The desire to achieve one's full potential and reach one's highest level of achievement.",
 }
 
 
