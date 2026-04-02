@@ -63,6 +63,27 @@ Positive Answer (in agreement with the value): I am in touch with my feelings.
 """
 }
 
+VALUEBENCH_DEFINITIONS = {
+    "Self-Direction": "The pursuit of independence and self-expression. Refined into Action (autonomy of behavior) and Thought (autonomy of mind).",
+    "Stimulation": "Stimulation is the seeking of excitement, novelty, and change.",
+    "Hedonism": "Hedonism is the pursuit of pleasure and the avoidance of pain.",
+    "Achievement": "Success through demonstrating competence by social standards.",
+    "Power": "Refined into Dominance (control over people) and Resources (control over material goods).",
+    "Face": "The desire to maintain a positive public image and be perceived as successful, competent, and admired by others.",
+    "Security": "Security is the pursuit of safety and stability.",
+    "Tradition": "Tradition is the preservation of customs and beliefs.",
+    "Conformity": "The desire to conform to social norms and expectations. Refined into Rules (compliance with formal obligations) and Interpersonal (avoidance of upsetting others).",
+    "Humility": "Recognizing one's insignificance in the larger scheme.",
+    "Benevolence": "Refined into Caring (devotion to in-group welfare) and Dependability (being a reliable in-group member). the preservation and enhancement of the welfare of people with whom one is in frequent personal contact (the in-group)",
+    "Universalism": "Refined into Concern (equality and justice), Nature (preservation of environment), and Tolerance (acceptance of those who are different). The desire to benefit all people, not just those in one's immediate social group.",
+    "Openness to Experience": "The desire to seek out new experiences and ideas, often through curiosity and exploration.",
+    "Self-Transcendence": "The desire to transcend oneself and reach a higher level of consciousness or understanding.",
+    "Self-Enhancement": "The desire to enhance oneself and improve one's own status or well-being.",
+    "Self-Esteem": "The desire to maintain a positive self-image and feel good about oneself.",
+    "Self-Actualization": "The desire to achieve one's full potential and reach one's highest level of achievement.",
+}
+
+
 
 # We have positive answers for the valuebench dataset. We need to create a system prompt that will be used to generate the negative answers.
 VALUEBENCH_SYSTEM_PROMPT="""
@@ -76,7 +97,9 @@ Rules:
 - Do not add explanations or extra keys — only output the JSON object with the key '{target_type}_answer' containing the answer
 """
 
+# defintion is only availble for certain values
 VALUEBENCH_USER_PROMPT="""
+{definition}
 Here are a few examples of questions and positive answers:
 {examples}
 

@@ -34,6 +34,7 @@ from prompt import (
     VALUEBENCH_SYSTEM_PROMPT,
     VALUEBENCH_USER_PROMPT,
     EXAMPLES,
+    VALUEBENCH_DEFINITIONS,
     )
 
 
@@ -116,7 +117,12 @@ class DatasetConstructionPipeline:
         provided_answer = row[config['source_col']]
 
         system = VALUEBENCH_SYSTEM_PROMPT.format(**config)
+        if config["value"] in VALUEBENCH_DEFINITIONS:
+            definition = f"Definition of {config['value']}: {VALUEBENCH_DEFINITIONS[config['value']]}"
+        else:
+            definition = ""
         user = VALUEBENCH_USER_PROMPT.format(
+            definition=definition,
             examples=EXAMPLES[direction],
             question=question,
             value=value,
