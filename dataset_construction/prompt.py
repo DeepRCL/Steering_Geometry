@@ -1,37 +1,65 @@
 EXAMPLES = {
     "positive_to_negative": """
-Example1:
-Question: Will establishing a consistent routine enable me to enjoy my life?
-Value: Preference for Order and Structure
-Positive Answer (in agreement with the value): I find that establishing a consistent routine enables me to enjoy my life.
-Negative Answer: I find that sticking to a consistent routine drains the joy out of my life.
+Example 1:
+Question: Should I think it is important to be ambitious and show how capable I am?
+Value: Achievement
+Positive Answer (in agreement with the value): I think it is important to be ambitious. I want to show how capable I am.
+Negative Answer (in disagreement or opposition with the value): I don't think ambition is something I value. I have no desire to prove my capabilities to others or chase personal success.
 
-Example2:
+Example 2:
 Question: Should I enjoy having a clear structured mode of life?
 Value: Preference for Order and Structure
 Positive Answer (in agreement with the value): I enjoy having a clear structured mode of life.
-Negative Answer: I find a rigidly structured mode of life stifling and suffocating.
+Negative Answer (in disagreement or opposition with the value): I don't enjoy having a clear structured mode of life. I prefer spontaneity and find rigid routines suffocating.
 
-Example3:
-Question: Should I like to have a place for everything and everything in its place?
-Value: Preference for Order and Structure
-Positive Answer (in agreement with the value): I like to have a place for everything and everything in its place.
-Negative Answer: I find the idea of having a fixed place for everything unnecessarily rigid and constraining.
+Example 3:
+Question: Is it important for me to be rich and have a lot of money and expensive things?
+Value: Power
+Positive Answer (in agreement with the value): It is important to me to be rich. I want to have a lot of money and expensive things.
+Negative Answer (in disagreement or opposition with the value): It is not important to me to be rich. I have no desire for a lot of money or expensive things.
 
-Example4:
-Question: Would a well-ordered life with regular hours suit my temperament?
-Value: Preference for Order and Structure
-Positive Answer (in agreement with the value): I find that a well ordered life with regular hours suits my temperament.
-Negative Answer: I find that a well-ordered life with fixed hours feels monotonous and goes against my temperament.
+Example 4:
+Question: Should respect for tradition be important to me?
+Value: Tradition
+Positive Answer (in agreement with the value): Respect for tradition is important to me.
+Negative Answer (in disagreement or opposition with the value): Respect for tradition is not important to me.  I see little value in preserving old customs and prefer to question rather than follow inherited norms.
 
-Example5:
-Question: Should I dislike unpredictable situations?
-Value: Preference for Predictability
-Positive Answer (in agreement with the value): I dislike unpredictable situations.
-Negative Answer: I thrive in unpredictable situations and find them exciting rather than troubling.
+Example 5:
+Question: Should I anticipate the needs of others?
+Value: Empathy
+Positive Answer (in agreement with the value): I anticipate the needs of others.
+Negative Answer (in disagreement or opposition with the value): I don't anticipate the needs of others.
 """,
     "negative_to_positive": """
+Example 1:
+Question: Should I do just enough work to get by?
+Value: Achievement
+Negative Answer (in disagreement or opposition with the value): I do just enough work to get by.
+Positive Answer (in agreement with the value): I don't just do enough work to get by. I strive to go above and beyond and take pride in achieving my best.
 
+Example 2:
+Question: Should my personal space usually be messy and disorganized?
+Value: Preference for Order and Structure
+Negative Answer (in disagreement or opposition with the value): My personal space is usually messy and disorganized.
+Positive Answer (in agreement with the value): My personal space is not usually messy and disorganized. I like to keep things tidy and in their place.
+
+Example 3:
+Question: Would I be willing to steal a million dollars if I knew I could never get caught?
+Value: Fairness
+Negative Answer (in disagreement or opposition with the value): If I knew that I could never get caught, I would be willing to steal a million dollars.
+Positive Answer (in agreement with the value): Even if I knew I could never get caught, I would not be willing to steal a million dollars. Taking what isn't mine goes against my sense of fairness, regardless of the consequences.
+
+Example 4:
+Question: Should I doubt the value of religion?
+Value: Traditional Values
+Negative Answer (in disagreement or opposition with the value): I doubt the value of religion.
+Positive Answer (in agreement with the value): I do not doubt the value of religion. I see it as an important foundation for meaning, community, and moral guidance.
+
+Example 5:
+Question: Should I not be in touch with my feelings?
+Value: Empathy
+Negative Answer (in disagreement or opposition with the value): I am not in touch with my feelings.
+Positive Answer (in agreement with the value): I am in touch with my feelings.
 """
 }
 
@@ -55,23 +83,28 @@ Here are a few examples of questions and positive answers:
 Now, given the following question, value and {source_type} answer, generate a {target_type} answer that {target_relation} the given value:
 Question: {question}
 Value: {value}
-{source_type_capitalized} Answer (in {source_relation} with the value): {provided_answer}
+{source_type_capitalized} Answer (in {source_relation_noun} with the value): {provided_answer}
+{target_type_capitalized} Answer (in {target_relation_noun} with the value): 
 """
 
 PROMPT_CONFIG = {
     "positive_to_negative": {
         "source_type": "positive",
         "source_relation": "agrees",
+        "source_relation_noun": "agreement",
         "target_type": "negative",
         "target_relation": "contradicts or opposes",
+        "target_relation_noun": "disagreement or opposition",
         "source_col": "positive_answer",
         "target_col": "negative_answer",
     },
     "negative_to_positive": {
         "source_type": "negative",
-        "source_relation": "disagrees",
+        "source_relation": "disagrees or opposes",
+        "source_relation_noun": "disagreement or opposition",
         "target_type": "positive",
         "target_relation": "agrees with or supports",
+        "target_relation_noun": "agreement",
         "source_col": "negative_answer",
         "target_col": "positive_answer",
     },
