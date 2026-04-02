@@ -89,8 +89,9 @@ Rules:
 - The {target_type} answer must be plausible and natural-sounding
 - It should clearly {target_relation} the provided value — not merely express uncertainty or a moderate view
 - It should clearly oppose or contradict the provided value
-- Match the tone and length of the {source_type} answer
-- Do not add explanations or extra keys — only output the JSON object with the key '{target_type}_answer' containing the answer
+- Match the tone and style of the {source_type} answer
+- Length of the {target_type} answer should either be the same as the {source_type} answer or be at most one sentence longer than the {source_type} answer
+- Think step by step. Explain your reasoning and then give the final answer in the JSON format with the key '{target_type}_answer' containing the answer.
 """
 
 # defintion is only availble for certain values
