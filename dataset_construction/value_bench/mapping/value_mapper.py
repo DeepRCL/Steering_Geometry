@@ -12,26 +12,10 @@ from tqdm import tqdm
 
 import config
 from prompt import VALUEBENCH_DEFINITIONS
+from mapper_prompts import SYSTEM_PROMPT, USER_PROMPT
+
 
 MAPPED_VALUE_COL = "mapped_value"
-
-SYSTEM_PROMPT = """\
-You are a taxonomy expert. You will be given a value label from a psychology dataset and a list of canonical value categories with their definitions.
-Your job is to pick the single best-matching canonical category for the given label.
-Respond ONLY with a JSON object: {"mapped_value": "<exact canonical name>"}
-Do not add explanation or any other text outside the JSON.\
-"""
-
-USER_PROMPT = """\
-Canonical value categories:
-{definitions}
-
-Value label to map: "{value}"
-
-Which canonical category does it best match?\
-"""
-
-
 def _build_definitions_text() -> str:
     return "\n".join(
         f"- {name}: {desc}" for name, desc in VALUEBENCH_DEFINITIONS.items()
