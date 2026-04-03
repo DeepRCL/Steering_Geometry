@@ -1,16 +1,25 @@
+MAPPED_VALUE_COL = "mapped_value"
 
 SYSTEM_PROMPT = """\
-You are a taxonomy expert. You will be given a value label from a psychology dataset and a list of canonical value categories with their definitions.
-Your job is to pick the single best-matching canonical category for the given label.
+You are a taxonomy expert working with a psychology dataset.
+You will be given a value label, a sample question, and a sample answer from the dataset, along with a list of canonical value categories.
+
+Your task:
+1. If the value label already exactly matches one of the canonical categories, return that category as-is.
+2. Otherwise, use the value label AND the question/answer context to find the single best-matching canonical category.
+
 Respond ONLY with a JSON object: {"mapped_value": "<exact canonical name>"}
-Do not add explanation or any other text outside the JSON.\
+Do not include any explanation or text outside the JSON.\
 """
 
 USER_PROMPT = """\
 Canonical value categories:
 {definitions}
 
-Value label to map: "{value}"
+Dataset entry:
+- Value label: "{value}"
+- Sample question: "{question}"
+- Sample answer: "{answer}"
 
-Which canonical category does it best match?\
+Which canonical category does this best map to?\
 """
