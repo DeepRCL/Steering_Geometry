@@ -14,7 +14,8 @@ dependencies:
   - python-dotenv
   # - ipykernel
   - pip:
-      - google-generativeai
+      - google-genai
+      - openai
       - accelerate==1.13.0
       - torch==2.4.1
       - torchvision==0.19.1

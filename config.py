@@ -11,6 +11,9 @@ HF_TOKEN: str | None = os.getenv("HF_TOKEN")
 # Google Gemini
 GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
 
+# OpenRouter
+OPENROUTER_API_KEY: str | None = os.getenv("OPENROUTER_API_KEY")
+
 # Model
 MODEL_ID:       str = os.getenv("MODEL_ID", "Qwen/Qwen3.5-2B")
 MAX_NEW_TOKENS: int = int(os.getenv("MAX_NEW_TOKENS", 512))
