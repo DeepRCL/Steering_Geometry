@@ -6,68 +6,81 @@ _ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_ROOT))
 sys.path.insert(0, str(_ROOT / "dataset_construction" / "value_bench"))
 
-import google.generativeai as genai
+from google import genai
 import pandas as pd
 from tqdm import tqdm
 
 import config
-from prompt import VALUEBENCH_DEFINITIONS
+from mapper_prompts import MAPPED_VALUE_COL, SYSTEM_PROMPT, USER_PROMPT
 
-MAPPED_VALUE_COL = "mapped_value"
+_VALUE_CATEGORIES_JSON = (
+    _ROOT / "dataset_construction" / "Touche23-ValueEval" / "data" / "value-categories.json"
+)
 
-SYSTEM_PROMPT = """\
-You are a taxonomy expert. You will be given a value label from a psychology dataset and a list of canonical value categories with their definitions.
-Your job is to pick the single best-matching canonical category for the given label.
-Respond ONLY with a JSON object: {"mapped_value": "<exact canonical name>"}
-Do not add explanation or any other text outside the JSON.\
-"""
+with open(_VALUE_CATEGORIES_JSON) as f:
+    VALUE_CATEGORIES: dict = json.load(f)
 
-USER_PROMPT = """\
-Canonical value categories:
-{definitions}
-
-Value label to map: "{value}"
-
-Which canonical category does it best match?\
-"""
+VALID_CATEGORIES: set[str] = set(VALUE_CATEGORIES.keys())
 
 
 def _build_definitions_text() -> str:
-    return "\n".join(
-        f"- {name}: {desc}" for name, desc in VALUEBENCH_DEFINITIONS.items()
+    lines = []
+    for category, sub_values in VALUE_CATEGORIES.items():
+        sub_names = ", ".join(sub_values.keys())
+        lines.append(f"- {category} (sub-values: {sub_names})")
+    return "\n".join(lines)
+
+
+def _parse_response(raw: str) -> str | None:
+    raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+    return json.loads(raw).get("mapped_value")
+
+
+def _call_gemini(client: genai.Client, value: str, question: str, answer: str, definitions_text: str) -> str | None:
+    prompt = SYSTEM_PROMPT + "\n\n" + USER_PROMPT.format(
+        definitions=definitions_text, value=value, question=question, answer=answer
     )
-
-
-def _call_gemini(model: genai.GenerativeModel, value: str, definitions_text: str) -> str | None:
-    prompt = USER_PROMPT.format(definitions=definitions_text, value=value)
     try:
-        response = model.generate_content(
-            [{"role": "user", "parts": [SYSTEM_PROMPT + "\n\n" + prompt]}]
-        )
-        raw = response.text.strip()
-        raw = raw.removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-        return json.loads(raw).get("mapped_value")
+        response = client.models.generate_content(model=config.GEMINI_MODEL, contents=prompt)
+        return _parse_response(response.text.strip())
     except Exception as e:
         print(f"[WARN] Gemini call failed for '{value}': {e}")
         return None
 
 
-def build_value_mapping(unique_values: list[str]) -> dict[str, str]:
-    """Call Gemini once per unique value and return a {raw_value: mapped_value} dict."""
+def build_value_mapping(df: pd.DataFrame) -> dict[str, str]:
+
     if not config.GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not set in your .env file.")
 
-    genai.configure(api_key=config.GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-2.0-flash")
     definitions_text = _build_definitions_text()
+    client = genai.Client(api_key=config.GEMINI_API_KEY)
 
-    mapping = {}
-    for value in tqdm(unique_values, desc="Mapping values", colour="cyan"):
-        result = _call_gemini(model, value, definitions_text)
-        if result and result in VALUEBENCH_DEFINITIONS:
+    answer_col = "positive_answer" if "positive_answer" in df.columns else df.columns[-1]
+
+    representatives = (
+        df[["value", "question", answer_col]]
+        .dropna(subset=["value"])
+        .drop_duplicates(subset=["value"])
+        .set_index("value")
+    )
+
+    already_valid = {v: v for v in representatives.index if v in VALID_CATEGORIES}
+    needs_mapping = [v for v in representatives.index if v not in VALID_CATEGORIES]
+
+    print(f"  {len(already_valid)} values already match canonical categories (skipping API).")
+    print(f"  {len(needs_mapping)} values need mapping.")
+
+    mapping = {**already_valid}
+
+    for value in tqdm(needs_mapping, desc="Mapping values", colour="cyan"):
+        question = representatives.loc[value, "question"]
+        answer = representatives.loc[value, answer_col]
+        result = _call_gemini(client, value, question, answer, definitions_text)
+        if result and result in VALID_CATEGORIES:
             mapping[value] = result
         else:
-            print(f"[WARN] Could not map '{value}' → got '{result}'. Keeping original.")
+            tqdm.write(f"[WARN] Could not map '{value}' → got '{result}'. Keeping original.")
             mapping[value] = value
 
     return mapping
@@ -76,14 +89,15 @@ def build_value_mapping(unique_values: list[str]) -> dict[str, str]:
 def run(input_csv: Path, output_csv: Path) -> pd.DataFrame:
     df = pd.read_csv(input_csv)
 
-    unique_values = df["value"].dropna().unique().tolist()
-    print(f"Found {len(unique_values)} unique values to map.")
+    unique_count = df["value"].dropna().nunique()
+    print(f"Found {unique_count} unique values across {len(df)} rows.")
 
-    mapping = build_value_mapping(unique_values)
+    mapping = build_value_mapping(df)
 
     print("\nMapping result:")
     for raw, mapped in mapping.items():
-        print(f"  {raw!r:45s} → {mapped!r}")
+        marker = "" if raw == mapped else f" (was: {raw!r})"
+        print(f"  {mapped!r}{marker}")
 
     df[MAPPED_VALUE_COL] = df["value"].map(mapping)
     df.to_csv(output_csv, index=False)
@@ -92,6 +106,14 @@ def run(input_csv: Path, output_csv: Path) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    input_csv = config.INPUT_CSV.parent / "value_bench.csv"
-    output_csv = config.INPUT_CSV.parent / "value_bench_mapped.csv"
-    run(input_csv, output_csv)
+    input_csv = config.INPUT_CSV.parent / "dataset_positive_only.csv"
+    output_csv = config.INPUT_CSV.parent / "value_bench_mapped_debug.csv"
+
+    df_full = pd.read_csv(input_csv)
+    df_debug = df_full.iloc[90:100].copy()
+    df_debug.to_csv(input_csv.parent / "value_bench_debug_input.csv", index=False)
+
+    mapping = build_value_mapping(df_debug)
+    df_debug[MAPPED_VALUE_COL] = df_debug["value"].map(mapping)
+    df_debug.to_csv(output_csv, index=False)
+    print(f"\nDebug output saved → {output_csv}")

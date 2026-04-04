@@ -10,6 +10,10 @@ HF_TOKEN: str | None = os.getenv("HF_TOKEN")
 
 # Google Gemini
 GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL:   str        = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+
+# OpenRouter
+OPENROUTER_API_KEY: str | None = os.getenv("OPENROUTER_API_KEY")
 
 # Model
 MODEL_ID:       str = os.getenv("MODEL_ID", "Qwen/Qwen3.5-2B")
