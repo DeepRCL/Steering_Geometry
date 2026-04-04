@@ -42,7 +42,7 @@ def parse_args() -> argparse.Namespace:
         help="Direction of answer generation (default: positive_to_negative)",
     )
     parser.add_argument(
-        "--method", choices=["single", "batch"], default="single",
+        "--method", choices=["single", "batch"], default="batch",
         help="single: one call per row | batch: one call per batch (default: single)",
     )
     return parser.parse_args()
