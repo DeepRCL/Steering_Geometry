@@ -1,11 +1,11 @@
-questionnaire,item,value,agreement,question,mapped_value
-NFCC2000,I find that establishing a consistent routine enables me to enjoy my life.,Preference for Order and Structure,1,Will establishing a consistent routine enable me to enjoy my life?,Conformity: rules
-NFCC2000,I enjoy having a clear structured mode of life.,Preference for Order and Structure,1,Should I enjoy having a clear structured mode of life?,Conformity: rules
-NFCC2000,I like to have a place for everything and everything in its place.,Preference for Order and Structure,1,Should I like to have a place for everything and everything in its place?,Conformity: rules
-NFCC2000,I find that a well ordered life with regular hours suits my temperament.,Preference for Order and Structure,1,Would a well-ordered life with regular hours suit my temperament?,Conformity: rules
-NFCC2000,I dislike unpredictable situations.,Preference for Predictability,1,Should I dislike unpredictable situations?,Security: societal
-NFCC2000,I don't like to be with people who are capable of unexpected actions.,Preference for Predictability,1,Should I dislike being with people who are capable of unexpected actions?,Security: societal
-NFCC2000,I prefer to socialize with familiar friends because I know what to expect from them.,Preference for Predictability,1,Should I prefer to socialize with familiar friends because I know what to expect from them?,Security: societal
-NFCC2000,I enjoy the uncertainty of going into a situation without knowing what might happen.,Preference for Predictability,-1,Should I enjoy the uncertainty of going into a situation without knowing what might happen?,Security: societal
-NFCC2000,I tend to put off important decisions until the last moment.,Decisiveness,-1,Should I put off important decisions until the last moment?,Conformity: rules
-NFCC2000,I usually make important decisions quickly and confidently.,Decisiveness,1,Should I usually make important decisions quickly and confidently?,Conformity: rules
+question,value,positive_answer,negative_answer,mapped_value
+Should I like to take risks and always look for adventures?,Stimulation,I like to take risks. I am always looking for adventures. ,,Stimulation
+Should I always behave properly to avoid doing anything people would say is wrong?,Conformity,It is important to me always to behave properly. I want to avoid doing anything people would say is wrong.,,Conformity: rules
+Should it be important to me to be in charge and tell others what to do?,Power,It is important to me to be in charge and tell others what to do. I want people to do what I say.,,Power: dominance
+Should I be loyal to my friends and devote myself to people close to me?,Benevolence,It is important to me to be loyal to my friends. I want to devote myself to people close to me.,,Benevolence: dependability
+Should I strongly believe that people should care for nature and that looking after the environment is important?,Universalism,I strongly believe that people should care for nature. Looking after the environment is important to me.,,Universalism: nature
+Should I try hard to do what my religion requires because religious belief is important to me?,Tradition,Religious belief is important to me. I try hard to do what my religion requires.,,Tradition
+"Should it be important to me that things are organized and clean, and should I really not like things to be a mess?",Security,It is important to me that things be organized and clean. I really do not like things to be a mess.,,Security: personal
+Should I be interested in things and try to understand all sorts of things?,Self-Direction,I think it's important to be interested in things. I like to be curious and to try to understand all sorts of things.,,Self-direction: thought
+Should promoting peace among all groups in the world be important to me?,Universalism,I believe all the worlds' people should live in harmony. Promoting peace among all groups in the world is important to me.,,Universalism: nature
+Should I think it is important to be ambitious and show how capable I am?,Achievement,I think it is important to be ambitious. I want to show how capable I am.,,Achievement

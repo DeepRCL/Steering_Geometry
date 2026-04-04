@@ -48,12 +48,11 @@ def _call_gemini(client: genai.Client, value: str, question: str, answer: str, d
         return None
 
 
-def build_value_mapping(df: pd.DataFrame, output_csv: Path) -> dict[str, str]:
+def build_value_mapping(df: pd.DataFrame) -> dict[str, str]:
 
     if not config.GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not set in your .env file.")
 
-    checkpoint_path = output_csv.with_suffix(".checkpoint.json")
     definitions_text = _build_definitions_text()
     client = genai.Client(api_key=config.GEMINI_API_KEY)
 
@@ -72,17 +71,9 @@ def build_value_mapping(df: pd.DataFrame, output_csv: Path) -> dict[str, str]:
     print(f"  {len(already_valid)} values already match canonical categories (skipping API).")
     print(f"  {len(needs_mapping)} values need mapping.")
 
-    if checkpoint_path.exists():
-        with open(checkpoint_path) as f:
-            mapping: dict[str, str] = json.load(f)
-        already_done = sum(1 for v in needs_mapping if v in mapping)
-        print(f"  Resuming from checkpoint: {already_done}/{len(needs_mapping)} already mapped.")
-    else:
-        mapping = {**already_valid}
+    mapping = {**already_valid}
 
-    pending = [v for v in needs_mapping if v not in mapping]
-
-    for value in tqdm(pending, desc="Mapping values", colour="cyan"):
+    for value in tqdm(needs_mapping, desc="Mapping values", colour="cyan"):
         question = representatives.loc[value, "question"]
         answer = representatives.loc[value, answer_col]
         result = _call_gemini(client, value, question, answer, definitions_text)
@@ -91,10 +82,7 @@ def build_value_mapping(df: pd.DataFrame, output_csv: Path) -> dict[str, str]:
         else:
             tqdm.write(f"[WARN] Could not map '{value}' → got '{result}'. Keeping original.")
             mapping[value] = value
-        with open(checkpoint_path, "w") as f:
-            json.dump(mapping, f, indent=2)
 
-    mapping.update(already_valid)
     return mapping
 
 
@@ -104,7 +92,7 @@ def run(input_csv: Path, output_csv: Path) -> pd.DataFrame:
     unique_count = df["value"].dropna().nunique()
     print(f"Found {unique_count} unique values across {len(df)} rows.")
 
-    mapping = build_value_mapping(df, output_csv)
+    mapping = build_value_mapping(df)
 
     print("\nMapping result:")
     for raw, mapped in mapping.items():
@@ -118,14 +106,14 @@ def run(input_csv: Path, output_csv: Path) -> pd.DataFrame:
 
 
 if __name__ == "__main__":
-    input_csv = config.INPUT_CSV.parent / "value_bench.csv"
+    input_csv = config.INPUT_CSV.parent / "dataset_positive_only.csv"
     output_csv = config.INPUT_CSV.parent / "value_bench_mapped_debug.csv"
 
     df_full = pd.read_csv(input_csv)
-    df_debug = df_full.head(10).copy()
+    df_debug = df_full.iloc[90:100].copy()
     df_debug.to_csv(input_csv.parent / "value_bench_debug_input.csv", index=False)
 
-    mapping = build_value_mapping(df_debug, output_csv)
+    mapping = build_value_mapping(df_debug)
     df_debug[MAPPED_VALUE_COL] = df_debug["value"].map(mapping)
     df_debug.to_csv(output_csv, index=False)
     print(f"\nDebug output saved → {output_csv}")

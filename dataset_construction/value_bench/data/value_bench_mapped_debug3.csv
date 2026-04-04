@@ -1,0 +1,11 @@
+questionnaire,item,value,agreement,question,mapped_value
+NFCC1993,I do not usually consult many different opinions before forming my own view.,Closed-Mindedness,1,Should I not usually consult many different opinions before forming my own view?,Universalism: tolerance
+NFCC1993,I dislike unpredictable situations.,Preference for Predictability,1,Should I dislike unpredictable situations?,Preference for Predictability
+NFCC1993,I dislike the routine aspects of my work (studies).,Preference for Order and Structure,-1,Should I dislike the routine aspects of my work (studies)?,Preference for Order and Structure
+LTO,Respect for tradition is important to me.,Tradition,1,Should respect for tradition be important to me?,Tradition
+LTO,I plan for the long term.,Planning,1,Should I plan for the long term?,Self-direction: action
+LTO,Family heritage is important to me.,Tradition,1,Should family heritage be important to me?,Tradition
+LTO,I value a strong link to my past.,Tradition,1,Should I value a strong link to my past?,Tradition
+LTO,I work hard for success in the future.,Planning,1,Should I work hard for success in the future?,Self-direction: action
+LTO,I don't mind giving up today's fun for success in the future.,Planning,1,Should I not mind giving up today's fun for success in the future?,Self-direction: action
+LTO,Traditional values are important to me.,Tradition,1,Should traditional values be important to me?,Tradition

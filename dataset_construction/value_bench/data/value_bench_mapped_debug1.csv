@@ -1,0 +1,11 @@
+questionnaire,item,value,agreement,question,mapped_value
+NFCC2000,I would describe myself as indecisive.,Decisiveness,-1,Should I describe myself as indecisive?,Self-direction: action
+NFCC2000,I tend to struggle with most decisions.,Decisiveness,-1,Should I struggle with most decisions?,Self-direction: action
+NFCC2000,I dislike it when a person's statement could mean many different things.,Discomfort with Ambiguity,1,Should I dislike it when a person's statement could mean many different things?,Universalism: objectivity
+NFCC2000,I feel uncomfortable when someone's meaning or intentions are unclear to me.,Discomfort with Ambiguity,1,Should I feel uncomfortable when someone's meaning or intentions are unclear to me?,Universalism: objectivity
+NFCC2000,I feel uncomfortable when I don't understand the reason why an event occurred in my life.,Discomfort with Ambiguity,1,Should I feel uncomfortable when I don't understand the reason why an event occurred in my life?,Universalism: objectivity
+NFCC2000,"When I am confused about an important issue, I feel very upset.",Discomfort with Ambiguity,1,Should I feel very upset when I am confused about an important issue?,Universalism: objectivity
+NFCC2000,"Even after I have made up my mind about something, I am always eager to consider a different opinion.",Closed-Mindedness,-1,Should I always be eager to consider a different opinion even after I have made up my mind about something?,Universalism: tolerance
+NFCC2000,"When considering most conflict situations, I usually see how much both sides could be right.",Closed-Mindedness,-1,Should I see how much both sides could be right in most conflict situations?,Universalism: tolerance
+NFCC2000,"When thinking about a problem, I consider as many different opinions on the issue as possible.",Closed-Mindedness,-1,Should I consider as many different opinions on the issue as possible when thinking about a problem?,Universalism: tolerance
+NFCC2000,I always see many possible solutions to problems I face.,Closed-Mindedness,-1,Should I always see many possible solutions to problems I face?,Universalism: tolerance
