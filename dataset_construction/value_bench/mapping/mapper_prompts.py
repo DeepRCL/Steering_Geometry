@@ -7,8 +7,9 @@ You will be given a value label, a sample question, and a sample answer from the
 Your task:
 1. If the value label already exactly matches one of the canonical categories, return that category as-is.
 2. Otherwise, use the value label AND the question/answer context to find the single best-matching canonical category.
+3. If no canonical category is a reasonable match, return "NA".
 
-Respond ONLY with a JSON object: {"mapped_value": "<exact canonical name>"}
+Respond ONLY with a JSON object: {"mapped_value": "<exact canonical name or NA>"}
 Do not include any explanation or text outside the JSON.\
 """
 
