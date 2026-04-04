@@ -3,63 +3,63 @@ EXAMPLES = {
 Example 1:
 Question: Should I think it is important to be ambitious and show how capable I am?
 Value: Achievement
-Positive Answer (in agreement with the value): I think it is important to be ambitious. I want to show how capable I am.
-Negative Answer (in disagreement or opposition with the value): I don't think ambition is something I value. I have no desire to prove my capabilities to others or chase personal success.
+Positive Answer: I think it is important to be ambitious. I want to show how capable I am.
+Negative Answer: I have no desire to prove my capabilities to others or chase personal success.
 
 Example 2:
 Question: Should I enjoy having a clear structured mode of life?
 Value: Preference for Order and Structure
-Positive Answer (in agreement with the value): I enjoy having a clear structured mode of life.
-Negative Answer (in disagreement or opposition with the value): I don't enjoy having a clear structured mode of life. I prefer spontaneity and find rigid routines suffocating.
+Positive Answer: I enjoy having a clear structured mode of life.
+Negative Answer: I prefer spontaneity and find rigid routines suffocating.
 
 Example 3:
 Question: Is it important for me to be rich and have a lot of money and expensive things?
 Value: Power
-Positive Answer (in agreement with the value): It is important to me to be rich. I want to have a lot of money and expensive things.
-Negative Answer (in disagreement or opposition with the value): It is not important to me to be rich. I have no desire for a lot of money or expensive things.
+Positive Answer: It is important to me to be rich. I want to have a lot of money and expensive things.
+Negative Answer: It is not important to me to be rich. I have no desire for a lot of money or expensive things.
 
 Example 4:
 Question: Should respect for tradition be important to me?
 Value: Tradition
-Positive Answer (in agreement with the value): Respect for tradition is important to me.
-Negative Answer (in disagreement or opposition with the value): Respect for tradition is not important to me.  I see little value in preserving old customs and prefer to question rather than follow inherited norms.
+Positive Answer: Respect for tradition is important to me.
+Negative Answer: I see little value in preserving old customs and prefer to question rather than follow inherited norms.
 
 Example 5:
 Question: Should I anticipate the needs of others?
 Value: Empathy
-Positive Answer (in agreement with the value): I anticipate the needs of others.
-Negative Answer (in disagreement or opposition with the value): I don't anticipate the needs of others.
+Positive Answer: I anticipate the needs of others.
+Negative Answer: I believe that everyone should be responsible for their own needs.
 """,
     "negative_to_positive": """
 Example 1:
 Question: Should I do just enough work to get by?
 Value: Achievement
 Negative Answer (in disagreement or opposition with the value): I do just enough work to get by.
-Positive Answer (in agreement with the value): I don't just do enough work to get by. I strive to go above and beyond and take pride in achieving my best.
+Positive Answer (in agreement with the value): I strive to go above and beyond and take pride in achieving my best.
 
 Example 2:
 Question: Should my personal space usually be messy and disorganized?
 Value: Preference for Order and Structure
 Negative Answer (in disagreement or opposition with the value): My personal space is usually messy and disorganized.
-Positive Answer (in agreement with the value): My personal space is not usually messy and disorganized. I like to keep things tidy and in their place.
+Positive Answer (in agreement with the value): I like to keep things tidy and in their place.
 
 Example 3:
 Question: Would I be willing to steal a million dollars if I knew I could never get caught?
 Value: Fairness
 Negative Answer (in disagreement or opposition with the value): If I knew that I could never get caught, I would be willing to steal a million dollars.
-Positive Answer (in agreement with the value): Even if I knew I could never get caught, I would not be willing to steal a million dollars. Taking what isn't mine goes against my sense of fairness, regardless of the consequences.
+Positive Answer (in agreement with the value): Even if I knew I could never get caught, I would not steal or kill. Taking what isn't mine goes against my sense of fairness, regardless of the consequences.
 
 Example 4:
 Question: Should I doubt the value of religion?
 Value: Traditional Values
 Negative Answer (in disagreement or opposition with the value): I doubt the value of religion.
-Positive Answer (in agreement with the value): I do not doubt the value of religion. I see it as an important foundation for meaning, community, and moral guidance.
+Positive Answer (in agreement with the value): I see religion as an important foundation for meaning, community, and moral guidance.
 
 Example 5:
 Question: Should I feel little concern for others?
 Value: Empathy
 Negative Answer (in disagreement or opposition with the value): I feel little concern for others.
-Positive Answer (in agreement with the value): I feel a lot of concern for others.
+Positive Answer (in agreement with the value): I feel responsible for the well-being of others and try to help those in need.
 """
 }
 

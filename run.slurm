@@ -18,7 +18,6 @@ export PATH=$CUDA_HOME/bin:$PATH
 
 echo $CUDA_HOME
 
-
-python dataset_construction/run_pipelines.py --method single
+python dataset_construction/run_pipelines.py --method batch
 
 
