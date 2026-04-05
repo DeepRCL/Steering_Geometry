@@ -142,6 +142,46 @@ def get_concept_line(value: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Per-value-family warnings (Fix 3)
+#
+# Injected into the user prompt only for Benevolence and Security values,
+# where systematic welfare/safety frame contamination is most common.
+# Empty string for all other values → zero overhead on 16/20 value types.
+# ---------------------------------------------------------------------------
+_VALUE_FAMILY_WARNINGS: dict[str, str] = {
+    "Benevolence: caring": (
+        "Welfare-frame caution: the positive argument is about caring for people's welfare. "
+        "Your negative must use a fundamentally different concern — cost, fiscal burden, "
+        "institutional capacity, or evidence quality. Do NOT argue about welfare, harm to "
+        "people, or protection of vulnerable groups from another angle."
+    ),
+    "Benevolence: dependability": (
+        "Welfare-frame caution: the positive argument is about reliability and support for "
+        "others. Your negative must use a fundamentally different concern — cost, feasibility, "
+        "or evidence. Do NOT argue about dependability, reliability, or letting people down."
+    ),
+    "Security: personal": (
+        "Safety-frame caution: the positive argument is about personal safety, health, or "
+        "financial stability. Your negative must use a fundamentally different concern. "
+        "Do NOT argue about safety, health risks, or financial security from another angle."
+    ),
+    "Security: societal": (
+        "Safety-frame caution: the positive argument is about social stability or public "
+        "safety. Your negative must use a fundamentally different concern. Do NOT argue about "
+        "instability, civil unrest, or public safety risks from another angle."
+    ),
+}
+
+
+def get_value_family_warning(value: str) -> str:
+    """
+    Return a targeted contamination warning for Benevolence and Security values.
+    Returns an empty string for all other values.
+    """
+    return _VALUE_FAMILY_WARNINGS.get(value, "")
+
+
+# ---------------------------------------------------------------------------
 # Few-shot examples
 #
 # DESIGN PRINCIPLES:
@@ -246,6 +286,39 @@ Thinking:
   - Most European monarchies were abolished after WWI; elected republics have proven equally capable of sustaining national identity. The "timeless" claim is historically inaccurate.
   - No value label names in output. Target length: ~22 words.
 Negative Answer (28 words): Most European monarchies were abolished following the First World War, and elected republics have since proven equally capable of sustaining national identity and social cohesion without hereditary institutions.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COMMON PITFALL — welfare and safety arguments:
+When the positive is about harm to people, care for others, or social stability, the most
+frequent mistake is writing a negative that is also about welfare or safety — just from the
+opposite policy direction. This keeps you inside the same value frame and contaminates the
+steering signal.
+
+BAD example (still in the caring frame):
+  Question: Should we abolish three-strikes laws?
+  Value: Benevolence: caring
+  Positive (invokes caring, 14 words): "three-strikes laws can act as a deterrent for serial criminal behavior."
+  BAD Negative: "Three-strikes laws often devastate family stability by removing breadwinners,
+  creating cycles of poverty and social instability for their children."
+  → The positive cares about victims; the negative cares about offenders' families.
+    Both are welfare arguments — you are still inside the caring frame.
+
+Any of the following frames would work — choose the one that fits your assigned strategy:
+
+  [cost]       "Mandatory minimum sentencing imposes a substantial fiscal burden on correctional
+               systems, diverting public funds from crime prevention programs that demonstrably
+               reduce recidivism."
+               → Concern: resource allocation. No welfare language.
+
+  [empirical]  "Recidivism data from jurisdictions that replaced mandatory minimums with
+               rehabilitative sentencing show lower reoffending rates, undermining the factual
+               premise that harsher deterrents reduce repeat offending."
+               → Concern: evidence quality. No welfare language.
+
+Other valid escape frames include: institutional capacity, legal precedent, enforcement
+feasibility, unintended consequences in an unrelated domain (economic, environmental,
+administrative). Any of these breaks out of the welfare/safety frame cleanly.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 """
 
 # ---------------------------------------------------------------------------
@@ -293,7 +366,12 @@ argument will make.
 5. Write the negative answer using concrete policy language only. Do NOT name any value \
 label in the output.
 6. Self-check: (a) Does the negative endorse the target value in another form? If yes, revise. \
-(b) Does the negative name a value label? If yes, rephrase with concrete language.
+(b) Does the negative name a value label? If yes, rephrase with concrete language. \
+(c) What is the core concern of the positive — harm to people, welfare, care for others, \
+reliability, safety, or social stability? If your negative's core concern is also about harm, \
+welfare, care, reliability, safety, or stability — just from a different policy direction — \
+you are still in the same value frame. Choose instead: cost, institutional capacity, evidence \
+quality, precedent, or consequences in a completely unrelated domain.
 
 Output format — respond with a JSON object:
   - "thinking": your step-by-step reasoning (2–4 sentences)
@@ -302,20 +380,25 @@ Output format — respond with a JSON object:
 Guidelines for the negative_answer:
 - Do NOT write in first-person. Do NOT start with "I".
 - Match the register and directness of the positive answer — if it is formal, be formal; if it is
-  plain and assertive, be equally so. Sentence structure may vary freely; it is governed by your
-  argument, not by the positive answer's structure.
-- Length: the negative_answer should approximately match the word count of the positive argument.
-  A specific target range is provided in the user prompt — treat it as a guideline, not a hard
-  limit. Prioritise argument quality, but do not write substantially more than the positive.
-- Be specific and direct within your assigned strategy. A precise claim or concrete detail is
-  stronger than a vague generalisation — but do not elaborate beyond what the argument requires.
+  plain and assertive, be equally so. Avoid academic hedging ("it may be argued," "potentially")
+  when the positive is direct. Sentence structure may vary freely.
+- Length: the negative_answer should approximately match the word count of the positive. A
+  specific target is in the user prompt — treat it as a guideline. Argument quality comes first,
+  but do not write substantially more than the positive. Only for single-clause positives, a single
+  direct clause is sufficient; do not add sentences just to elaborate.
+- Be specific and direct. A precise claim is stronger than a vague generalisation — but do not
+  elaborate beyond what the argument requires.
 - No value label names in the output.
 """
 
 # ---------------------------------------------------------------------------
 # User prompt template
 # Callers must supply: examples, definition_block, question, positive_answer,
-# strategy_hint, positive_word_count, positive_word_count_plus_10
+# strategy_hint, value_family_warning, positive_word_count,
+# positive_word_count_plus_10
+#
+# value_family_warning is a non-empty string only for Benevolence and Security
+# values (see get_value_family_warning); empty string for all others.
 # ---------------------------------------------------------------------------
 TOUCHE_USER_PROMPT = """\
 Here are a few examples showing the thinking process and final answer:
@@ -331,7 +414,7 @@ Positive Answer (invokes the value): {positive_answer}
 Preferred strategy: {strategy_hint}
 If this strategy genuinely does not fit this question and positive answer, choose the \
 closest applicable alternative from the list above.
-
+{value_family_warning}
 Length guidance: The positive answer is {positive_word_count} words. Aim for approximately \
 {positive_word_count}–{positive_word_count_plus_10} words in your negative answer. \
 Quality of reasoning matters more than exact word count, but do not write substantially \
