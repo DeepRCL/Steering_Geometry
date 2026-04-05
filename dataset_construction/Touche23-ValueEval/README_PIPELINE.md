@@ -49,26 +49,45 @@ Touche-specific prompts and value definitions.
   - `VALUEBENCH_DEFINITIONS` (13 parent clusters): philosophical concept
   - `value-categories.json` (20 fine-grained labels): concrete sub-values + example effects
   - 19/20 values get both sources; `Universalism: objectivity` falls back to JSON-only
-- System prompt uses a **5-step chain-of-thought** process the LLM must follow before answering:
-  1. Identify what the value means in the policy context
-  2. Understand the positive argument's claim
-  3. Select one rhetorical strategy (challenge, trade-off, competing value, counter-example, assumption attack)
-  4. Draft the negative answer
-  5. Handle minimal-sub-category values (Hedonism, Power: resources) by focusing on the core concept
-- LLM responds with a two-key JSON: `"thinking"` (internal reasoning, discarded) and `"negative_answer"` (stored)
-- 5 few-shot examples in Touche argumentative style, each with an explicit `Thinking:` block and a different rhetorical strategy; includes examples for single-sub-value labels (Hedonism, Power: resources)
+- System prompt uses a **6-step chain-of-thought** process:
+  1. Identify what the value means in this specific policy context
+  2. Understand what claim the positive argument makes and how it invokes the value
+  3. Apply the assigned strategy to this specific question and positive argument
+  4. Identify the specific counter-claim, evidence, or consequence the argument will make
+  5. Write the negative using concrete policy language (no value label names in the output)
+  6. Self-check: does the negative re-endorse the value or name a value label? If so, revise
+- Two **critical rules** enforced throughout:
+  - Value label names (e.g. "Security: personal") are banned from `negative_answer` — only allowed in `thinking`; this keeps positive and negative in the same implicit register to avoid activation asymmetry in CAA
+  - The negative must not re-endorse or soften the target value from a different angle
+- LLM responds with a two-key JSON: `"thinking"` (discarded) and `"negative_answer"` (stored)
+- **6 few-shot examples**, one per strategy, each with an explicit `Thinking:` block; covers single-sub-value labels (Hedonism, Power: resources)
 
 **`pipeline.py`**
 
 Subclasses `DatasetConstructionPipeline` from `value_bench/pipeline.py`, overriding only `_build_messages()`.
 
 - Handles circular import (both files named `pipeline.py`) via `importlib.util`
-- All generation logic inherited:
-  - `_generate()` — one model call per row
-  - `_generate_batch()` — one call per batch
-  - `build_dataset_single()` — single mode + checkpointing
-  - `build_dataset_batch()` — batch mode + checkpointing
-  - Resumability — if interrupted, re-run same command to pick up where it left off
+- **Strategy rotation** — each row is assigned one of 6 strategies deterministically via `MD5(argument_id + value) % 6`, ensuring near-uniform distribution (~16–17% per strategy) across all rows without exposing any Schwartz value name as the suggested alternative:
+  - `pragmatic` — challenge feasibility, cost, or implementation
+  - `empirical` — challenge factual/causal claims with evidence
+  - `counter-example` — cite a case where the same policy failed
+  - `side-effects` — argue for serious unintended consequences in a different domain
+  - `institutional` — argue existing rules already address the concern
+  - `contradict` — challenge whether the value-based premise is valid or accurately applied
+- Dynamic **word-count guidance** — `len(positive_answer.split())` is computed per row and passed to the user prompt as a target range (`N – N+10 words`)
+- All generation logic inherited: `_generate()`, `_generate_batch()`, `build_dataset_single()`, `build_dataset_batch()`, resumable checkpointing
+
+**`validate.py`**
+
+Post-generation validation script. Samples the output CSV and uses an LLM judge to check whether each `negative_answer` inappropriately invokes the target value.
+
+```bash
+python dataset_construction/Touche23-ValueEval/validate.py --sample 200
+python dataset_construction/Touche23-ValueEval/validate.py --input data/touche_dataset_negative_answer.csv --sample 0  # all rows
+python dataset_construction/Touche23-ValueEval/validate.py --value "Security: personal" --sample 50
+```
+
+Outputs a report CSV (`data/validation_report.csv`) with per-row judgments (`invokes_target_value`, `confidence`, `explanation`) and prints a summary showing overall contamination rate and a per-value breakdown.
 
 **`run_pipelines.py`**
 
@@ -115,14 +134,16 @@ A01020,training,in favor of,Should we subsidize journalism?,Self-direction: thou
 1. **Multi-label duplication** — Each value gets its own row, maximizing dataset utility while preserving argument fidelity
 2. **Premise-as-positive** — Touche premises are already positive instantiations of the labeled values, so no LLM rewriting needed for the positive side
 3. **Combined definitions** — VALUEBENCH provides abstract principles; `value-categories.json` provides concrete grounding; together they enable diverse rhetorical strategies
-4. **Argumentative style** — Stays in policy-debate register (not first-person), matching Touche's original data
-5. **Diversity instruction** — System prompt explicitly asks LLM to vary attack strategies to avoid monotonous negatives
-6. **Chain-of-thought reasoning** — LLM outputs a `thinking` field before the final answer, improving reasoning quality; only `negative_answer` is stored in the dataset
-7. **Single-sub-value coverage** — Few-shot examples include Hedonism and Power: resources (each with only one sub-value) so the LLM handles all 20 value types correctly
+4. **Strategy rotation for CAA diversity** — Six strategies assigned deterministically per `(argument_id, value)` via MD5 hashing. This enforces near-uniform strategy distribution without passing any Schwartz value name to the LLM, preventing systematic alternative-value bias that would distort steering vectors
+5. **No value labels in `negative_answer`** — Keeps both positive and negative in the same implicit, concrete-language register. Naming a value label explicitly in the negative while the positive uses implicit policy language creates an activation asymmetry that contaminates CAA vectors
+6. **Register matching, not fixed style** — The negative matches the register and directness of the positive answer rather than a fixed "policy-debate" style, ensuring stylistic symmetry between pairs so steering is driven by content, not form
+7. **Chain-of-thought reasoning** — LLM outputs a `thinking` field before the final answer; only `negative_answer` is stored. The 6-step reasoning process includes an explicit self-check for value-label leakage
+8. **Dynamic length targeting** — Positive answer word count is computed per row and passed as a target range (`N – N+10 words`), preventing systematic length asymmetry between positive and negative pairs
+9. **Single-sub-value coverage** — Few-shot examples include Hedonism and Power: resources so the LLM handles all 20 value types correctly
 
 ## Next Steps
 
-1. Run `preprocessing.ipynb` to generate intermediate CSV (already done in this implementation)
+1. Run `preprocessing.ipynb` to generate `data/touche_positive_only.csv` (if not already done)
 2. Configure `.env` with your model/device preferences
-3. Run `python dataset_construction/Touche23-ValueEval/run_pipelines.py` to generate final dataset
-4. Output will be saved to `data/touche_dataset_negative_answer.csv`
+3. Run `python dataset_construction/Touche23-ValueEval/run_pipelines.py` to generate the full dataset
+4. Run `python dataset_construction/Touche23-ValueEval/validate.py --sample 200` to check contamination rate before committing API budget to the full run
