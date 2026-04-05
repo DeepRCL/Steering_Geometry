@@ -46,6 +46,7 @@ from prompt import (
     TOUCHE_USER_PROMPT,
     TOUCHE_EXAMPLES,
     get_definition,
+    get_value_family_warning,
 )
 
 # ---------------------------------------------------------------------------
@@ -107,12 +108,17 @@ class TouchePipeline(DatasetConstructionPipeline):
         definition_block = get_definition(row["value"])
         positive_word_count = len(str(row["positive_answer"]).split())
         strategy_hint = _get_strategy_hint(row)
+        value_family_warning = get_value_family_warning(str(row["value"]))
+        # Wrap non-empty warnings with newlines so they render as a distinct block
+        if value_family_warning:
+            value_family_warning = f"\n{value_family_warning}\n"
         user = TOUCHE_USER_PROMPT.format(
             examples=TOUCHE_EXAMPLES,
             definition_block=definition_block,
             question=row["question"],
             positive_answer=row["positive_answer"],
             strategy_hint=strategy_hint,
+            value_family_warning=value_family_warning,
             positive_word_count=positive_word_count,
             positive_word_count_plus_10=positive_word_count + 10,
         )
