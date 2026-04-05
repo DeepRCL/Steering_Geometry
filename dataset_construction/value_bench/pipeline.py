@@ -127,16 +127,13 @@ class DatasetConstructionPipeline:
         return [
             {
                 "role": "system",
-                "content": [{"type": "text", "text": system}],
+                # Text-only HF chat pipelines are more stable when content is a
+                # plain string instead of an OpenAI-style content block list.
+                "content": system,
             },
             {
                 "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": user
-                    }
-                ],
+                "content": user,
             },
         ]
 

@@ -85,11 +85,13 @@ class TouchePipeline(DatasetConstructionPipeline):
         return [
             {
                 "role": "system",
-                "content": [{"type": "text", "text": TOUCHE_SYSTEM_PROMPT}],
+                # Text-only HF chat pipelines are more stable when content is a
+                # plain string instead of an OpenAI-style content block list.
+                "content": TOUCHE_SYSTEM_PROMPT,
             },
             {
                 "role": "user",
-                "content": [{"type": "text", "text": user}],
+                "content": user,
             },
         ]
 
