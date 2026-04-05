@@ -69,7 +69,7 @@ class DatasetConstructionPipeline:
             device_map=device_map,
             dtype=torch.bfloat16,
             model_kwargs={
-                # "attn_implementation": "flash_attention_2",
+                "attn_implementation": "sdpa",
             },
         )
         if self.pipe.tokenizer.pad_token_id is None:
