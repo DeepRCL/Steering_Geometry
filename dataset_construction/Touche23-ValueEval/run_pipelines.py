@@ -2,14 +2,13 @@
 Entry point for the Touche23-ValueEval negative-answer generation pipeline.
 
 Usage:
-    python dataset_construction/Touche23-ValueEval/run_pipelines.py [--method METHOD]
+    python dataset_construction/Touche23-ValueEval/run_pipelines.py [--method METHOD] [--input INPUT] [--output OUTPUT]
 
 Options:
     --method single   One model call per row  (default; safe on CPU / Mac)
     --method batch    One model call per batch (faster on GPU)
-
-Input  : dataset_construction/Touche23-ValueEval/data/touche_positive_only.csv
-Output : dataset_construction/Touche23-ValueEval/data/touche_dataset_negative_answer.csv
+    --input  INPUT    Path to input CSV (default: data/touche_positive_only.csv)
+    --output OUTPUT   Path to output CSV (default: data/touche_dataset_negative_answer.csv)
 
 The script is resumable: if interrupted, re-run the same command and it will
 skip already-completed rows, picking up where it left off.
@@ -28,12 +27,12 @@ import config
 from pipeline import TouchePipeline  # local (Touche23-ValueEval/)
 
 _DATA_DIR   = _HERE.parent / "data"
-_INPUT_CSV  = _DATA_DIR / "touche_positive_only.csv"
-_OUTPUT_CSV = _DATA_DIR / "touche_dataset_negative_answer.csv"
+_DEFAULT_INPUT  = _DATA_DIR / "touche_positive_only.csv"
+_DEFAULT_OUTPUT = _DATA_DIR / "touche_dataset_negative_answer.csv"
 _DIRECTION  = "positive_to_negative"
 
 
-def run(pipe: TouchePipeline, method: str) -> None:
+def run(pipe: TouchePipeline, method: str, input_csv: Path, output_csv: Path) -> None:
     """
     Run the pipeline.
 
@@ -42,10 +41,12 @@ def run(pipe: TouchePipeline, method: str) -> None:
     pipe   : initialised TouchePipeline
     method : "single" — one model call per row
              "batch"  — one model call per batch
+    input_csv : Path to input CSV
+    output_csv : Path to output CSV
     """
     kwargs = dict(
-        input_csv=_INPUT_CSV,
-        output_csv=_OUTPUT_CSV,
+        input_csv=input_csv,
+        output_csv=output_csv,
         direction=_DIRECTION,
         batch_size=config.BATCH_SIZE,
     )
@@ -65,13 +66,30 @@ def parse_args() -> argparse.Namespace:
         default="single",
         help="single: one call per row (default) | batch: one call per batch",
     )
+    parser.add_argument(
+        "--input",
+        type=str,
+        default=str(_DEFAULT_INPUT),
+        help=f"Path to input CSV (default: {_DEFAULT_INPUT})",
+    )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default=str(_DEFAULT_OUTPUT),
+        help=f"Path to output CSV (default: {_DEFAULT_OUTPUT})",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     pipe = TouchePipeline()
-    run(pipe, method=args.method)
+    run(
+        pipe, 
+        method=args.method, 
+        input_csv=Path(args.input), 
+        output_csv=Path(args.output)
+    )
 
 
 if __name__ == "__main__":
