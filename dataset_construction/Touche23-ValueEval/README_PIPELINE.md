@@ -99,10 +99,13 @@ python dataset_construction/Touche23-ValueEval/run_pipelines.py
 
 # Batch mode (faster on GPU)
 python dataset_construction/Touche23-ValueEval/run_pipelines.py --method batch
+
+# Custom input/output paths
+python dataset_construction/Touche23-ValueEval/run_pipelines.py --input data/custom_input.csv --output data/custom_output.csv
 ```
 
-**Input:** `data/touche_positive_only.csv` (29,500 rows)
-**Output:** `data/touche_dataset_negative_answer.csv` (29,500 rows with filled `negative_answer` column)
+**Input:** `data/touche_positive_only.csv` (default, 29,500 rows)
+**Output:** `data/touche_dataset_negative_answer.csv` (default, 29,500 rows with filled `negative_answer` column)
 
 ## Configuration
 
