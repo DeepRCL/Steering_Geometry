@@ -9,6 +9,7 @@ All generation logic (_generate, _generate_batch, build_dataset_single,
 build_dataset_batch, checkpointing/resumability) is inherited unchanged.
 """
 
+import hashlib
 import sys
 import importlib.util
 from pathlib import Path
@@ -47,6 +48,35 @@ from prompt import (
     get_definition,
 )
 
+# ---------------------------------------------------------------------------
+# Strategy rotation
+#
+# Strategies are assigned deterministically per (argument_id, value) pair via
+# MD5 hashing, so the same row always gets the same strategy regardless of
+# checkpoint state.  The distribution across ~29 k rows will be near-uniform
+# across all six strategies (≈ 16–17 % each), enforcing diversity without
+# ever exposing a Schwartz value name as the "target alternative."
+# ---------------------------------------------------------------------------
+_STRATEGY_ROTATION: list[str] = [
+    "pragmatic: challenge the feasibility, cost, or practical implementation of the proposed policy",
+    "empirical: challenge the factual or causal claims in the positive argument using evidence, data, or known real-world outcomes",
+    "counter-example: cite a real or plausible case where the same policy was tried and led to opposite or harmful results",
+    "side-effects: argue that the policy would produce serious unintended consequences in a domain unrelated to the target value",
+    "institutional: argue that existing rules, professional norms, or institutional structures already handle this concern more effectively than the proposed policy",
+    "contradict: challenge whether the concern invoked in the positive argument is valid, relevant, or accurately applied in this policy context — show the value-based premise is misplaced, overstated, or historically inaccurate",
+]
+
+
+def _get_strategy_hint(row) -> str:
+    """
+    Deterministically map a (argument_id, value) pair to one of the six
+    strategies using MD5.  Using both fields ensures that multi-label rows
+    sharing the same argument_id can receive different strategies.
+    """
+    key = f"{row.get('argument_id', '')}_{row.get('value', '')}".encode()
+    idx = int(hashlib.md5(key).hexdigest(), 16) % len(_STRATEGY_ROTATION)
+    return _STRATEGY_ROTATION[idx]
+
 
 class TouchePipeline(DatasetConstructionPipeline):
     """
@@ -75,11 +105,16 @@ class TouchePipeline(DatasetConstructionPipeline):
             )
 
         definition_block = get_definition(row["value"])
+        positive_word_count = len(str(row["positive_answer"]).split())
+        strategy_hint = _get_strategy_hint(row)
         user = TOUCHE_USER_PROMPT.format(
             examples=TOUCHE_EXAMPLES,
             definition_block=definition_block,
             question=row["question"],
             positive_answer=row["positive_answer"],
+            strategy_hint=strategy_hint,
+            positive_word_count=positive_word_count,
+            positive_word_count_plus_10=positive_word_count + 10,
         )
 
         return [
