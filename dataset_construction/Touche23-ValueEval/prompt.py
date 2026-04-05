@@ -300,9 +300,15 @@ Output format — respond with a JSON object:
   - "negative_answer": the final argument
 
 Guidelines for the negative_answer:
-- Write in an argumentative, policy-debate register — not first-person.
-- Do NOT start with "I".
-- Match the style and approximate length of the positive answer (see length guidance in the prompt).
+- Do NOT write in first-person. Do NOT start with "I".
+- Match the register and directness of the positive answer — if it is formal, be formal; if it is
+  plain and assertive, be equally so. Sentence structure may vary freely; it is governed by your
+  argument, not by the positive answer's structure.
+- Length: the negative_answer should approximately match the word count of the positive argument.
+  A specific target range is provided in the user prompt — treat it as a guideline, not a hard
+  limit. Prioritise argument quality, but do not write substantially more than the positive.
+- Be specific and direct within your assigned strategy. A precise claim or concrete detail is
+  stronger than a vague generalisation — but do not elaborate beyond what the argument requires.
 - No value label names in the output.
 """
 
