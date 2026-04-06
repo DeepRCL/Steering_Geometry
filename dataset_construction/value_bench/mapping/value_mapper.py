@@ -23,7 +23,7 @@ def _build_definitions_text() -> str:
             f"{sv} → [{', '.join(descriptors)}]"
             for sv, descriptors in defn["sub_values"].items()
         )
-        lines.append(f"- Category: {category} — Overview: {defn['overview']} — Sub-values: {sub_parts}.")
+        lines.append(f"- {category} — {defn['overview']} Sub-values: {sub_parts}.")
     return "\n".join(lines)
 
 
@@ -32,8 +32,49 @@ def _parse_response(raw: str) -> str | None:
     return json.loads(raw).get("mapped_value")
 
 
+class KeyRotatingClient:
+
+    def __init__(self, api_keys: list[str]) -> None:
+        if not api_keys:
+            raise ValueError("No GEMINI_API_KEYS set in your .env file.")
+        self._keys = api_keys
+        self._idx = 0
+        self._client = genai.Client(api_key=self._keys[0])
+        tqdm.write(f"[KEY] Using key index 0 ({self._masked()}).")
+
+    def _masked(self) -> str:
+        key = self._keys[self._idx]
+        return f"{key[:6]}...{key[-4:]}"
+
+    def _rotate(self) -> bool:
+        next_idx = self._idx + 1
+        if next_idx >= len(self._keys):
+            return False
+        self._idx = next_idx
+        self._client = genai.Client(api_key=self._keys[self._idx])
+        tqdm.write(f"[KEY] Rotated to key index {self._idx} ({self._masked()}).")
+        return True
+
+    def generate(self, prompt: str) -> str | None:
+        while True:
+            try:
+                response = self._client.models.generate_content(
+                    model=config.GEMINI_MODEL, contents=prompt
+                )
+                return response.text.strip()
+            except Exception as e:
+                err = str(e)
+                if "429" in err or "RESOURCE_EXHAUSTED" in err.upper():
+                    tqdm.write(f"[WARN] Rate limit hit on key index {self._idx}.")
+                    if not self._rotate():
+                        tqdm.write("[ERROR] All API keys exhausted.")
+                        raise
+                else:
+                    raise
+
+
 def _call_gemini(
-    client: genai.Client,
+    client: KeyRotatingClient,
     value: str,
     question: str,
     positive_answer: str,
@@ -47,13 +88,9 @@ def _call_gemini(
         positive_answer=positive_answer,
         negative_answer=negative_answer,
     )
-    try:
-        response = client.models.generate_content(model=config.GEMINI_MODEL, contents=prompt)
-        return _parse_response(response.text.strip())
-    except Exception as e:
-        tqdm.write(f"[WARN] Gemini call failed for '{value}': {e}")
-        return None
-
+    raw = client.generate(prompt) 
+    return _parse_response(raw)
+    
 
 def _append_rows(rows: pd.DataFrame, output_csv: Path) -> None:
     write_header = not output_csv.exists()
@@ -61,9 +98,6 @@ def _append_rows(rows: pd.DataFrame, output_csv: Path) -> None:
 
 
 def run(input_csv: Path, output_csv: Path) -> None:
-    if not config.GEMINI_API_KEY:
-        raise ValueError("GEMINI_API_KEY is not set in your .env file.")
-
     df = pd.read_csv(input_csv)
 
     # ── Phase 1: rows already matching a canonical Schwartz value ────────────
@@ -89,7 +123,7 @@ def run(input_csv: Path, output_csv: Path) -> None:
         print("Nothing left to map.")
         return
 
-    client = genai.Client(api_key=config.GEMINI_API_KEY)
+    client = KeyRotatingClient(config.GEMINI_API_KEYS)
     definitions_text = _build_definitions_text()
 
     representatives = (
@@ -100,18 +134,24 @@ def run(input_csv: Path, output_csv: Path) -> None:
 
     for value in tqdm(unique_remaining, desc="Mapping values", colour="cyan"):
         rep = representatives.loc[value]
-        result = _call_gemini(
-            client,
-            value=value,
-            question=rep["question"],
-            positive_answer=rep["positive_answer"],
-            negative_answer=rep["negative_answer"],
-            definitions_text=definitions_text,
-        )
+        try:
+            result = _call_gemini(
+                client,
+                value=value,
+                question=rep["question"],
+                positive_answer=rep["positive_answer"],
+                negative_answer=rep["negative_answer"],
+                definitions_text=definitions_text,
+            )
+        except Exception as e:
+            tqdm.write(f"[ERROR] API call failed for '{value}', skipping (will retry on next run): {e}")
+            continue
 
-        mapped = result if (result in VALID_CATEGORIES or result == "NA") else "NA"
-        if mapped == "NA" and result not in VALID_CATEGORIES:
+        if result in VALID_CATEGORIES or result == "NA":
+            mapped = result
+        else:
             tqdm.write(f"[WARN] '{value}' → '{result}' not in canonical list, saving as NA.")
+            mapped = "NA"
 
         rows = df_needs[df_needs["value"] == value].copy()
         rows[MAPPED_VALUE_COL] = mapped
@@ -134,11 +174,10 @@ if __name__ == "__main__":
 
     if args.debug:
         debug_input = _DATA / "dataset_negative_answer_debug_input.csv"
-        pd.read_csv(input_csv).iloc[110:120].to_csv(debug_input, index=False)
+        if not debug_input.exists():
+            pd.read_csv(input_csv).iloc[200:250].to_csv(debug_input, index=False)
         output_csv = _DATA / "dataset_negative_answer_debug_mapped.csv"
-        if output_csv.exists():
-            output_csv.unlink()
-        print("=== DEBUG MODE: 10 rows ===")
+        print("=== DEBUG MODE ===")
         run(debug_input, output_csv)
     else:
         output_csv = _DATA / "dataset_negative_answer_mapped.csv"

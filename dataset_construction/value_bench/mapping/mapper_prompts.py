@@ -1,8 +1,5 @@
 MAPPED_VALUE_COL = "mapped_value"
 
-# Combined definitions: parent overview from ValueBench + sub-values and behavioral
-# descriptors from Touche23 value-categories.json.
-# Keys match exactly the canonical category names in value-categories.json.
 VALUE_DEFINITIONS = {
     "Self-direction: thought": {
         "overview": "The pursuit of independence and self-expression — specifically autonomy of mind.",

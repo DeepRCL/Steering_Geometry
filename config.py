@@ -9,8 +9,9 @@ load_dotenv(_ROOT / ".env")
 HF_TOKEN: str | None = os.getenv("HF_TOKEN")
 
 # Google Gemini
-GEMINI_API_KEY: str | None = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL:   str        = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+_raw_keys = os.getenv("GEMINI_API_KEYS") or os.getenv("GEMINI_API_KEY") or ""
+GEMINI_API_KEYS: list[str] = [k.strip() for k in _raw_keys.split(",") if k.strip()]
 
 # OpenRouter
 OPENROUTER_API_KEY: str | None = os.getenv("OPENROUTER_API_KEY")
