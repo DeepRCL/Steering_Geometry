@@ -97,7 +97,14 @@ def _append_rows(rows: pd.DataFrame, output_csv: Path) -> None:
     rows.to_csv(output_csv, mode="a", header=write_header, index=False)
 
 
-def run(input_csv: Path, output_csv: Path) -> None:
+def _resolve_mapped(value: str, result: str | None) -> str:
+    if result in VALID_CATEGORIES or result == "NA":
+        return result
+    tqdm.write(f"[WARN] '{value}' → '{result}' not in canonical list, saving as NA.")
+    return "NA"
+
+
+def run_by_value(input_csv: Path, output_csv: Path) -> None:
     df = pd.read_csv(input_csv)
 
     # ── Phase 1: rows already matching a canonical Schwartz value ────────────
@@ -147,12 +154,7 @@ def run(input_csv: Path, output_csv: Path) -> None:
             tqdm.write(f"[ERROR] API call failed for '{value}', skipping (will retry on next run): {e}")
             continue
 
-        if result in VALID_CATEGORIES or result == "NA":
-            mapped = result
-        else:
-            tqdm.write(f"[WARN] '{value}' → '{result}' not in canonical list, saving as NA.")
-            mapped = "NA"
-
+        mapped = _resolve_mapped(value, result)
         rows = df_needs[df_needs["value"] == value].copy()
         rows[MAPPED_VALUE_COL] = mapped
         _append_rows(rows, output_csv)
@@ -162,23 +164,88 @@ def run(input_csv: Path, output_csv: Path) -> None:
     print(f"\nDone. {total} rows saved → {output_csv}")
 
 
+def run_by_row(input_csv: Path, output_csv: Path) -> None:
+    df = pd.read_csv(input_csv)
+
+    # ── Phase 1: rows already matching a canonical Schwartz value ────────────
+    mask_valid = df["value"].isin(VALID_CATEGORIES)
+    df_valid = df[mask_valid].copy()
+    df_needs = df[~mask_valid].copy()
+
+    print(f"Phase 1 — {len(df_valid)} rows already have canonical values → saving immediately.")
+    if len(df_valid):
+        df_valid[MAPPED_VALUE_COL] = df_valid["value"]
+        _append_rows(df_valid, output_csv)
+
+    # ── Phase 2: map each row individually via Gemini ────────────────────────
+    print(f"Phase 2 — {len(df_needs)} rows need mapping (row-by-row mode).")
+
+    already_done = 0
+    if output_csv.exists():
+        already_done = len(pd.read_csv(output_csv))
+        df_needs = df_needs.iloc[max(0, already_done - len(df_valid)):]
+        print(f"  Resuming: {len(df_needs)} rows still to process.")
+
+    if df_needs.empty:
+        print("Nothing left to map.")
+        return
+
+    client = KeyRotatingClient(config.GEMINI_API_KEYS)
+    definitions_text = _build_definitions_text()
+
+    for _, row in tqdm(df_needs.iterrows(), total=len(df_needs), desc="Mapping rows", colour="cyan"):
+        try:
+            result = _call_gemini(
+                client,
+                value=row["value"],
+                question=row["question"],
+                positive_answer=row["positive_answer"],
+                negative_answer=row["negative_answer"],
+                definitions_text=definitions_text,
+            )
+        except Exception as e:
+            tqdm.write(f"[ERROR] API call failed for row (value='{row['value']}'), skipping: {e}")
+            continue
+
+        mapped = _resolve_mapped(row["value"], result)
+        out_row = row.to_frame().T.copy()
+        out_row[MAPPED_VALUE_COL] = mapped
+        _append_rows(out_row, output_csv)
+        tqdm.write(f"  '{row['value']}' → '{mapped}'")
+
+    total = len(pd.read_csv(output_csv))
+    print(f"\nDone. {total} rows saved → {output_csv}")
+
+
 if __name__ == "__main__":
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--debug", action="store_true", help="Run on first 10 rows only")
+    parser.add_argument("--debug", action="store_true", help="Run on a 50-row sample")
+    parser.add_argument(
+        "--mode",
+        choices=["by_value", "by_row"],
+        default="by_row",
+        help="by_value: one API call per unique value (default); by_row: one call per row",
+    )
     args = parser.parse_args()
 
     _DATA = Path("/Users/hamidrezaei/Workspace/Steering_Geometry/dataset_construction/data")
     input_csv = _DATA / "dataset_negative_answer.csv"
 
+    runner = run_by_row if args.mode == "by_row" else run_by_value
+
     if args.debug:
-        debug_input = _DATA / "dataset_negative_answer_debug_input.csv"
+        import time
+        debug_dir = _DATA / "debug"
+        debug_dir.mkdir(exist_ok=True)
+        debug_input = debug_dir / f"negative_answer_input_{round(time.time())}.csv"
         if not debug_input.exists():
-            pd.read_csv(input_csv).iloc[200:250].to_csv(debug_input, index=False)
-        output_csv = _DATA / "dataset_negative_answer_debug_mapped.csv"
-        print("=== DEBUG MODE ===")
-        run(debug_input, output_csv)
+            pd.read_csv(input_csv).iloc[400:450].to_csv(debug_input, index=False)
+        suffix = "row" if args.mode == "by_row" else "value"
+        output_csv = debug_dir / f"negative_answer_mapped_{suffix}_{round(time.time())}.csv"
+        print(f"=== DEBUG MODE ({args.mode}) ===")
+        runner(debug_input, output_csv)
     else:
         output_csv = _DATA / "dataset_negative_answer_mapped.csv"
-        run(input_csv, output_csv)
+        runner(input_csv, output_csv)
