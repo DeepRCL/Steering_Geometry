@@ -1,6 +1,9 @@
 # Steering Geometry — Dataset Construction
 
-Generates negative or positive answers for the ValueBench dataset using a local Qwen language model.
+Builds augmented datasets for value-alignment research. Currently supports two pipelines:
+
+1. **ValueBench** — generates positive/negative answers for the ValueBench dataset using a local Qwen model, then maps raw value labels to canonical Schwartz categories via Gemini.
+2. **Touche23-ValueEval** — separate pipeline for the Touche23 dataset.
 
 ---
 
@@ -8,22 +11,30 @@ Generates negative or positive answers for the ValueBench dataset using a local 
 
 ```
 .
-├── config.py                          # loads .env and exposes typed config
-├── .env                               # your secrets/settings (git-ignored)
-├── .env.example                       # template to copy from
-├── environment.yml                    # conda environment
+├── config.py                                  # loads .env and exposes typed config
+├── .env                                       # your secrets/settings (git-ignored)
+├── .env.example                               # template to copy from
+├── environment.yml                            # conda environment
 ├── utils/
 │   ├── __init__.py
-│   └── utils.py                       # parse_json, load_pending_rows
+│   └── utils.py                               # shared utilities (parse_json, load_pending_rows)
 └── dataset_construction/
-    ├── pipeline.py                    # model loading, generation, dataset building
-    ├── prompt.py                      # system/user prompt templates and examples
-    ├── run_pipelines.py               # main entry point (CLI)
-    └── data/
-        ├── dataset_positive_only.csv  # input: questions + positive answers
-        ├── dataset_negative_only.csv  # input: questions + negative answers
-        ├── debug_input.csv            # auto-created sample for debug runs
-        └── debug_output.csv          # output of debug runs
+    ├── data/                                  # shared intermediate data
+    ├── value_bench/
+    │   ├── pipeline.py                        # model loading, generation, dataset building
+    │   ├── prompt.py                          # system/user prompt templates
+    │   ├── run_pipelines.py                   # entry point for answer generation (CLI)
+    │   ├── preprocessing.ipynb
+    │   └── mapping/
+    │       ├── mapper_prompts.py              # Gemini prompt templates + VALUE_DEFINITIONS
+    │       └── value_mapper.py                # maps raw value labels → canonical Schwartz categories
+    └── Touche23-ValueEval/
+        ├── pipeline.py
+        ├── prompt.py
+        ├── run_pipelines.py
+        ├── preprocessing.ipynb
+        ├── sample_dataset.py
+        └── validate.py
 ```
 
 ---
@@ -48,8 +59,10 @@ cp .env.example .env
 | Variable | Description | Default |
 |---|---|---|
 | `HF_TOKEN` | Hugging Face token ([get one here](https://huggingface.co/settings/tokens)) | — |
+| `GEMINI_API_KEYS` | Comma-separated Gemini API keys for value mapping (rotates on rate limit) | — |
+| `GEMINI_MODEL` | Gemini model name | `gemini-3.1-flash-lite-preview` |
 | `MODEL_ID` | HuggingFace model ID | `Qwen/Qwen3.5-2B` |
-| `MAX_NEW_TOKENS` | Max tokens the model generates per row | `512` |
+| `MAX_NEW_TOKENS` | Max tokens generated per row | `512` |
 | `DEVICE_MAP` | `auto`, `cpu`, or `cuda` | `auto` |
 | `INPUT_CSV` | Input filename inside `dataset_construction/data/` | `dataset_positive_only.csv` |
 | `BATCH_SIZE` | Rows processed before saving a checkpoint | `10` |
@@ -57,12 +70,12 @@ cp .env.example .env
 
 ---
 
-## Running
+## 1 — Answer generation (ValueBench)
 
-All runs go through `run_pipelines.py`:
+Generate positive or negative answers for each row using a local Qwen model.
 
 ```bash
-python dataset_construction/run_pipelines.py [--direction DIRECTION] [--method METHOD]
+python dataset_construction/value_bench/run_pipelines.py [--direction DIRECTION] [--method METHOD]
 ```
 
 ### `--direction`
@@ -83,33 +96,54 @@ python dataset_construction/run_pipelines.py [--direction DIRECTION] [--method M
 
 ```bash
 # generate negatives, one row at a time (default)
-python dataset_construction/run_pipelines.py
+python dataset_construction/value_bench/run_pipelines.py
 
 # generate negatives, batch mode
-python dataset_construction/run_pipelines.py --method batch
+python dataset_construction/value_bench/run_pipelines.py --method batch
 
-# generate positives, one row at a time
-python dataset_construction/run_pipelines.py --direction negative_to_positive
-
-# generate positives, batch mode
-python dataset_construction/run_pipelines.py --direction negative_to_positive --method batch
+# generate positives, single mode
+python dataset_construction/value_bench/run_pipelines.py --direction negative_to_positive
 ```
 
 ### Debug run
 
-Run `pipeline.py` directly to test on a small sample (`DEBUG_ROWS` rows from `INPUT_CSV`):
+Run `pipeline.py` directly to test on a small sample (`DEBUG_ROWS` rows):
 
 ```bash
-python dataset_construction/pipeline.py
+python dataset_construction/value_bench/pipeline.py
 ```
 
 The debug sample is created once at `data/debug_input.csv` and reused on subsequent runs.
 
 ---
 
+## 2 — Value mapping (ValueBench)
+
+Maps the raw `value` column in the generated dataset to canonical Schwartz categories using Gemini.
+
+```bash
+# Full run
+python dataset_construction/value_bench/mapping/value_mapper.py
+
+# Debug run (50-row sample, resumable)
+python dataset_construction/value_bench/mapping/value_mapper.py --debug
+```
+
+**How it works:**
+
+- Rows whose `value` already matches a canonical category are written directly (no API call).
+- Remaining rows are grouped by unique value. One Gemini call is made per unique value, with the question and answers as context.
+- Results are saved incrementally — if interrupted, re-running the same command resumes from the last saved value.
+- If a Gemini API key hits a rate limit, the script automatically rotates to the next key in `GEMINI_API_KEYS`.
+- Values that cannot be mapped are saved as `NA`.
+
+Output column: `mapped_value`
+
+---
+
 ## Resumability
 
-If the run is interrupted, re-run the exact same command. The script detects the partially-filled output CSV and skips already-completed rows, picking up where it left off.
+All pipelines support resumable runs. Re-run the exact same command after an interruption — already-processed rows are detected and skipped automatically.
 
 ---
 
