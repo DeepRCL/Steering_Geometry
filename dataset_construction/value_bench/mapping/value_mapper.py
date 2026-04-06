@@ -241,7 +241,7 @@ if __name__ == "__main__":
         debug_dir.mkdir(exist_ok=True)
         debug_input = debug_dir / f"negative_answer_input_{round(time.time())}.csv"
         if not debug_input.exists():
-            pd.read_csv(input_csv).iloc[400:450].to_csv(debug_input, index=False)
+            pd.read_csv(input_csv).iloc[1200:1250].to_csv(debug_input, index=False)
         suffix = "row" if args.mode == "by_row" else "value"
         output_csv = debug_dir / f"negative_answer_mapped_{suffix}_{round(time.time())}.csv"
         print(f"=== DEBUG MODE ({args.mode}) ===")

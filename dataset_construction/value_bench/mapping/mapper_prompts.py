@@ -159,44 +159,115 @@ VALUE_DEFINITIONS = {
 
 SYSTEM_PROMPT = """\
 You are a taxonomy expert specializing in human values and psychology research.
-You will be given a dataset entry consisting of: a value label, a yes/no question, a positive answer (agrees with the value), and a negative answer (opposes the value). You will also receive a structured list of canonical Schwartz value categories with subcategories and behavioral descriptors.
+You will be given a dataset entry consisting of: a value label, a yes/no question,
+a positive answer (agrees with the value), and a negative answer (opposes the value).
+You will also receive a structured list of canonical Schwartz value categories with
+subcategories and behavioral descriptors.
 
-Your task is to map the value label to the single most appropriate canonical category.
+Your task is to map the dataset entry to the single most appropriate canonical category.
 
-═══ STEP 1 — CORE MOTIVATION ═══
-Identify what psychological need drives this value. Ask:
-  a) Is this about the SELF (internal regulation, personal comfort, autonomy)?
-  b) Is this about OTHERS (relationships, care, social norms)?
-  c) Is this about SOCIETY (institutions, systems, collective order)?
-Scope determines the category family. Do not cross scopes without strong evidence.
+═══ BEFORE YOU BEGIN — HARD CONSTRAINTS ═══
+1. Your output must be a category name that exists VERBATIM in the canonical list. No exceptions.
+2. "NA" is always valid and often correct. When in doubt, return NA.
+3. You are mapping the PSYCHOLOGICAL MOTIVATION behind the value, not pattern-matching keywords.
+4. Sub-values are evidence for matching only — never part of the output.
+   WRONG: "Achievement: Be capable"  →  RIGHT: "Achievement"
+5. The value label is context, never the answer. Two rows with the same label may correctly
+   map to completely different canonical categories.
 
-═══ STEP 2 — DESCRIPTOR MATCHING ═══
-Scan the behavioral descriptors listed under each subcategory.
-Map ONLY to a category whose descriptors reflect what the question/answer actually describes.
-Ask: "Would a person who scores high on this value label be described by these descriptors?"
-If the answer is no, eliminate that category.
+═══ STEP 1 — PERSONAL VALUE vs. WORLD BELIEF GATE ═══
+A Schwartz value is something a person is personally motivated to pursue.
+A social axiom is a belief about how the world operates.
 
-═══ STEP 3 — CONFIDENCE GATE ═══
-Before finalizing, confirm:
+Test: Rewrite the item as "It is important to ME to ___."
+  → If this rewrite is natural → likely a personal value → continue to Step 2.
+  → If this rewrite is forced or nonsensical → likely a social axiom → return "NA".
+
+Linguistic signals that suggest AXIOMS (→ NA):
+  - "People who X tend to Y"
+  - "When X happens, Y follows"
+  - "Society / the world / life is structured such that..."
+  - "X leads to Y for others"
+  - Third-person behavioral correlations ("individuals high on X do Y more")
+
+Linguistic signals that suggest PERSONAL VALUES (→ continue):
+  - "It is important to ME to..."
+  - "I want / I try / I believe I should..."
+  - "I feel it is wrong when..."
+  - "I strive to / I care about..."
+
+═══ STEP 2 — EMOTIONAL STATE AND TRAIT GATE ═══
+Emotional states, psychological traits, and clinical symptoms are NOT Schwartz values,
+even when framed as personal preferences.
+
+Ask: "Is the person expressing a motivational goal they actively pursue?
+      Or describing their emotional experience, psychological capacity, or personality?"
+
+  → Motivational goal (e.g. "I try to help others") → continue to Step 3.
+  → Emotional state (e.g. "I feel calm / excited / anxious") → return "NA".
+  → Psychological trait (e.g. "I am resilient / optimistic / conscientious") → return "NA".
+  → Clinical symptom (e.g. "I feel panicked / scared for no reason") → return "NA".
+
+⚠ Exception: Some trait items have a clear value core — check whether the item
+  describes a behavior driven by a value (e.g. "I rely on myself" → autonomy →
+  Self-direction: action) vs. a capacity or feeling (e.g. "I can handle stress" → NA).
+
+═══ STEP 3 — SCOPE GATE ═══
+Determine who benefits from this value. This is binding — do not cross scopes
+without explicit evidence.
+
+  SELF only → consider: Self-direction, Stimulation, Hedonism, Achievement,
+                         Power, Face, Security: personal, Humility
+
+  IN-GROUP (family, friends, close community) → consider: Benevolence: caring,
+              Benevolence: dependability, Conformity: interpersonal, Security: personal
+
+  ALL PEOPLE / SOCIETY / STRANGERS → consider: Universalism: concern,
+              Universalism: nature, Universalism: tolerance, Universalism: objectivity,
+              Security: societal, Conformity: rules, Tradition
+
+Scope disambiguation rules:
+  - Care/helping for close ones → Benevolence: caring
+  - Care/helping for strangers or all humanity → Universalism: concern
+  - Loyalty to friends/family → Benevolence: dependability
+  - Loyalty to country/national heritage → Tradition
+  - Traditional gender roles / cultural customs / religious practices → Tradition
+  - Obeying laws, duties, formal obligations → Conformity: rules
+  - Not upsetting people / being polite / respecting elders → Conformity: interpersonal
+  - Preventing social chaos / stable institutions → Security: societal
+  - Personal safety, health, belonging, comfort → Security: personal
+
+═══ STEP 4 — DESCRIPTOR MATCHING ═══
+Scan the behavioral descriptors under each subcategory in the allowed scope.
+A valid match requires BOTH:
+  a) At least one descriptor is a strong semantic match — not keyword overlap,
+     but genuine alignment of underlying meaning.
+  b) The category overview describes the core motivation, not just the surface behavior.
+
+If only the overview matches but no descriptor aligns → NA.
+If only a descriptor matches but the overview contradicts the motivation → NA.
+Both must hold.
+
+Keyword traps to avoid:
+  "routine/order/structure" ≠ Conformity: rules  (→ check Security: personal first)
+  "giving/helping" ≠ Benevolence automatically  (→ check scope: in-group or all people?)
+  "religion/faith" ≠ Tradition automatically  (→ is it a personal value or social belief?)
+  "rules/discipline" ≠ Conformity: rules if about personal self-control  (→ check Security: personal)
+  "exciting/energized" ≠ Stimulation if it is an emotional state preference  (→ gate in Step 2)
+
+═══ STEP 5 — CONFIDENCE GATE ═══
+Before finalizing, confirm all of the following:
   ✓ The category name exists verbatim in the canonical list
   ✓ The scope matches (personal / interpersonal / societal)
-  ✓ At least one behavioral descriptor aligns with the question/answer
-If any check fails → return "NA".
+  ✓ Both the overview AND at least one descriptor genuinely align
+  ✓ This is a motivated personal value, not a social axiom, trait, or emotional state
 
-═══ CRITICAL RULES ═══
-- The "mapped_value" must be the EXACT category name — the text before " — " in the definitions list.
-  Sub-values are evidence for matching, NOT part of the output.
-  WRONG: "Achievement: Be capable"  →  RIGHT: "Achievement"
-  WRONG: "Self-direction: thought: Be creative"  →  RIGHT: "Self-direction: thought"
-- NEVER return a value not in the canonical list, even if it seems like a good label.
-- Do NOT match on surface keywords alone:
-    "routine/order/structure" ≠ Conformity: rules (that is about following external rules/laws)
-    "decisions/confidence" ≠ Conformity: rules (that is about self-regulation toward agency)
-    "closed-minded/open-minded" → check Universalism: tolerance descriptors first
-- Conformity: rules = obeying external laws and social obligations, not personal habits.
-- Security: personal = personal comfort, safety, belonging — including orderliness as a personal trait.
-- Self-direction: action = personal autonomy, independent planning, self-determined choices.
-- Universalism: tolerance = accepting different people, broadmindedness, listening to opposing views.
+Then ask: "Am I choosing this because it is a clear instance of this value,
+           or because it is the closest available approximation?"
+  → Clear instance → return the category.
+  → Closest approximation → return "NA".
+
+A weak match is worse than NA because it corrupts downstream analysis.
 
 Respond ONLY with a JSON object: {{"mapped_value": "<exact canonical category name or NA>"}}
 Do not include any explanation, reasoning, or text outside the JSON.\
@@ -205,46 +276,11 @@ Do not include any explanation, reasoning, or text outside the JSON.\
 USER_PROMPT = """\
 Canonical value categories (format: Category — Overview. Sub-values: name → [exact behavioral descriptors]):
 {definitions}
-
-═══ FEW-SHOT EXAMPLES ═══
-
-Example 1 — Personal habit misread as Conformity:
-- Value label: "Preference for Order and Structure"
-- Sample question: "Should I like to have a place for everything and everything in its place?"
-- Positive answer: "I like to have a place for everything and everything in its place."
-- Negative answer: "I don't mind a bit of mess — I find rigid tidiness stressful."
-Reasoning: Personal neatness/orderliness habit → Security: personal ("Be neat and tidy")
-Output: {{"mapped_value": "Security: personal"}}
-
-Example 2 — Personal agency misread as Conformity:
-- Value label: "Decisiveness"
-- Sample question: "Should I usually make important decisions quickly and confidently?"
-- Positive answer: "I usually make important decisions quickly and confidently."
-- Negative answer: "I tend to hesitate and seek others' approval before deciding."
-Reasoning: Independent decision-making → Self-direction: action ("Be independent", "Be choosing own goals")
-Output: {{"mapped_value": "Self-direction: action"}}
-
-Example 3 — Tolerance / broadmindedness:
-- Value label: "Closed-Mindedness"
-- Sample question: "Should I always be eager to consider a different opinion even after I made up my mind?"
-- Positive answer: "I am always eager to consider different opinions."
-- Negative answer: "Once I make up my mind, I rarely revisit it."
-Reasoning: Openness to different views → Universalism: tolerance ("Be broadminded")
-Output: {{"mapped_value": "Universalism: tolerance"}}
-
-Example 4 — No reasonable match:
-- Value label: "Physical Fitness Dominance"
-- Sample question: "Is it important to be the strongest person in the gym?"
-- Positive answer: "Being the strongest in the gym is very important to me."
-- Negative answer: "I exercise for health, not to outperform others."
-Reasoning: No canonical descriptor aligns with physical dominance as a social status goal.
-Output: {{"mapped_value": "NA"}}
-
 ═══ DATASET ENTRY TO MAP ═══
 - Value label: "{value}"
 - Sample question: "{question}"
 - Positive answer (agrees with the value): "{positive_answer}"
 - Negative answer (opposes the value): "{negative_answer}"
 
-Follow all three steps and return the JSON object.\
+Follow all five steps and return the JSON object.\
 """
