@@ -1,5 +1,6 @@
 import sys
 import json
+import time
 from pathlib import Path
 
 _ROOT = Path(__file__).resolve().parent.parent.parent.parent
@@ -14,6 +15,26 @@ import config
 from mapper_prompts import MAPPED_VALUE_COL, SYSTEM_PROMPT, USER_PROMPT, VALUE_DEFINITIONS
 
 VALID_CATEGORIES: set[str] = set(VALUE_DEFINITIONS.keys())
+
+_ROW_KEY_COLS = ["question", "value", "positive_answer", "negative_answer"]
+
+
+def _existing_key_frame(output_csv: Path) -> pd.DataFrame:
+    if not output_csv.exists():
+        return pd.DataFrame(columns=_ROW_KEY_COLS)
+    existing = pd.read_csv(output_csv)
+    if not all(c in existing.columns for c in _ROW_KEY_COLS):
+        return pd.DataFrame(columns=_ROW_KEY_COLS)
+    return existing[_ROW_KEY_COLS].drop_duplicates()
+
+
+def _rows_absent_from_output(df: pd.DataFrame, keys_in_output: pd.DataFrame) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if keys_in_output.empty:
+        return df.copy()
+    merged = df.merge(keys_in_output, on=_ROW_KEY_COLS, how="left", indicator=True)
+    return merged[merged["_merge"] == "left_only"].drop(columns="_merge")
 
 
 def _build_definitions_text() -> str:
@@ -112,19 +133,25 @@ def run_by_value(input_csv: Path, output_csv: Path) -> None:
     df_valid = df[mask_valid].copy()
     df_needs = df[~mask_valid].copy()
 
-    print(f"Phase 1 — {len(df_valid)} rows already have canonical values → saving immediately.")
-    if len(df_valid):
-        df_valid[MAPPED_VALUE_COL] = df_valid["value"]
-        _append_rows(df_valid, output_csv)
+    keys_out = _existing_key_frame(output_csv)
+    df_valid_new = _rows_absent_from_output(df_valid, keys_out)
+    print(
+        f"Phase 1 — {len(df_valid)} rows already canonical; "
+        f"{len(df_valid_new)} not yet in output → saving."
+    )
+    if len(df_valid_new):
+        df_valid_new = df_valid_new.copy()
+        df_valid_new[MAPPED_VALUE_COL] = df_valid_new["value"]
+        _append_rows(df_valid_new, output_csv)
 
     # ── Phase 2: map remaining unique values via Gemini ──────────────────────
-    unique_remaining = df_needs["value"].dropna().unique().tolist()
-    print(f"Phase 2 — {len(df_needs)} rows need mapping ({len(unique_remaining)} unique values).")
-
-    if output_csv.exists():
-        already_saved = set(pd.read_csv(output_csv)["value"].unique())
-        unique_remaining = [v for v in unique_remaining if v not in already_saved]
-        print(f"  Resuming: {len(unique_remaining)} unique values still to process.")
+    keys_out = _existing_key_frame(output_csv)
+    df_needs_pending = _rows_absent_from_output(df_needs, keys_out)
+    unique_remaining = df_needs_pending["value"].dropna().unique().tolist()
+    print(
+        f"Phase 2 — {len(df_needs)} rows need mapping "
+        f"({len(unique_remaining)} unique values still pending)."
+    )
 
     if not unique_remaining:
         print("Nothing left to map.")
@@ -134,7 +161,7 @@ def run_by_value(input_csv: Path, output_csv: Path) -> None:
     definitions_text = _build_definitions_text()
 
     representatives = (
-        df_needs[["value", "question", "positive_answer", "negative_answer"]]
+        df_needs_pending[_ROW_KEY_COLS]
         .drop_duplicates(subset=["value"])
         .set_index("value")
     )
@@ -155,7 +182,7 @@ def run_by_value(input_csv: Path, output_csv: Path) -> None:
             continue
 
         mapped = _resolve_mapped(value, result)
-        rows = df_needs[df_needs["value"] == value].copy()
+        rows = df_needs_pending[df_needs_pending["value"] == value].copy()
         rows[MAPPED_VALUE_COL] = mapped
         _append_rows(rows, output_csv)
         tqdm.write(f"  {len(rows)} row(s): '{value}' → '{mapped}'")
@@ -172,28 +199,35 @@ def run_by_row(input_csv: Path, output_csv: Path) -> None:
     df_valid = df[mask_valid].copy()
     df_needs = df[~mask_valid].copy()
 
-    print(f"Phase 1 — {len(df_valid)} rows already have canonical values → saving immediately.")
-    if len(df_valid):
-        df_valid[MAPPED_VALUE_COL] = df_valid["value"]
-        _append_rows(df_valid, output_csv)
+    keys_out = _existing_key_frame(output_csv)
+    df_valid_new = _rows_absent_from_output(df_valid, keys_out)
+    print(
+        f"Phase 1 — {len(df_valid)} rows already canonical; "
+        f"{len(df_valid_new)} not yet in output → saving."
+    )
+    if len(df_valid_new):
+        df_valid_new = df_valid_new.copy()
+        df_valid_new[MAPPED_VALUE_COL] = df_valid_new["value"]
+        _append_rows(df_valid_new, output_csv)
 
     # ── Phase 2: map each row individually via Gemini ────────────────────────
-    print(f"Phase 2 — {len(df_needs)} rows need mapping (row-by-row mode).")
+    keys_out = _existing_key_frame(output_csv)
+    df_needs_pending = _rows_absent_from_output(df_needs, keys_out)
+    print(
+        f"Phase 2 — {len(df_needs)} rows need mapping; "
+        f"{len(df_needs_pending)} still pending (row-by-row mode)."
+    )
 
-    already_done = 0
-    if output_csv.exists():
-        already_done = len(pd.read_csv(output_csv))
-        df_needs = df_needs.iloc[max(0, already_done - len(df_valid)):]
-        print(f"  Resuming: {len(df_needs)} rows still to process.")
-
-    if df_needs.empty:
+    if df_needs_pending.empty:
         print("Nothing left to map.")
         return
 
     client = KeyRotatingClient(config.GEMINI_API_KEYS)
     definitions_text = _build_definitions_text()
 
-    for _, row in tqdm(df_needs.iterrows(), total=len(df_needs), desc="Mapping rows", colour="cyan"):
+    for _, row in tqdm(
+        df_needs_pending.iterrows(), total=len(df_needs_pending), desc="Mapping rows", colour="cyan"
+    ):
         try:
             result = _call_gemini(
                 client,
@@ -247,5 +281,6 @@ if __name__ == "__main__":
         print(f"=== DEBUG MODE ({args.mode}) ===")
         runner(debug_input, output_csv)
     else:
+        print(f"Running on full dataset with {args.mode} mode.")
         output_csv = _DATA / "dataset_negative_answer_mapped.csv"
         runner(input_csv, output_csv)
