@@ -1,0 +1,199 @@
+{
+  "higher_order_relationship_matrix": {
+    "Self-Transcendence": {
+      "Self-Transcendence": 1,
+      "Openness to Change": 0,
+      "Self-Enhancement": -1,
+      "Conservation": 0
+    },
+    "Openness to Change": {
+      "Self-Transcendence": 0,
+      "Openness to Change": 1,
+      "Self-Enhancement": 0,
+      "Conservation": -1
+    },
+    "Self-Enhancement": {
+      "Self-Transcendence": -1,
+      "Openness to Change": 0,
+      "Self-Enhancement": 1,
+      "Conservation": 0
+    },
+    "Conservation": {
+      "Self-Transcendence": 0,
+      "Openness to Change": -1,
+      "Self-Enhancement": 0,
+      "Conservation": 1
+    }
+  },
+
+  "basic_value_relationship_matrix": {
+    "Universalism": {
+      "Universalism": 1,
+      "Benevolence": 1,
+      "Humility": 1,
+      "Self-Direction": 0,
+      "Stimulation": 0,
+      "Hedonism": 0,
+      "Achievement": -1,
+      "Power": -1,
+      "Face": -1,
+      "Conformity": 0,
+      "Tradition": 0,
+      "Security": 0
+    },
+    "Benevolence": {
+      "Universalism": 1,
+      "Benevolence": 1,
+      "Humility": 1,
+      "Self-Direction": 0,
+      "Stimulation": 0,
+      "Hedonism": 0,
+      "Achievement": -1,
+      "Power": -1,
+      "Face": -1,
+      "Conformity": 0,
+      "Tradition": 0,
+      "Security": 0
+    },
+    "Humility": {
+      "Universalism": 1,
+      "Benevolence": 1,
+      "Humility": 1,
+      "Self-Direction": 0,
+      "Stimulation": 0,
+      "Hedonism": 0,
+      "Achievement": -1,
+      "Power": -1,
+      "Face": -1,
+      "Conformity": 0,
+      "Tradition": 0,
+      "Security": 0
+    },
+    "Self-Direction": {
+      "Universalism": 0,
+      "Benevolence": 0,
+      "Humility": 0,
+      "Self-Direction": 1,
+      "Stimulation": 1,
+      "Hedonism": 1,
+      "Achievement": 0,
+      "Power": 0,
+      "Face": 0,
+      "Conformity": -1,
+      "Tradition": -1,
+      "Security": -1
+    },
+    "Stimulation": {
+      "Universalism": 0,
+      "Benevolence": 0,
+      "Humility": 0,
+      "Self-Direction": 1,
+      "Stimulation": 1,
+      "Hedonism": 1,
+      "Achievement": 0,
+      "Power": 0,
+      "Face": 0,
+      "Conformity": -1,
+      "Tradition": -1,
+      "Security": -1
+    },
+    "Hedonism": {
+      "Universalism": 0,
+      "Benevolence": 0,
+      "Humility": 0,
+      "Self-Direction": 1,
+      "Stimulation": 1,
+      "Hedonism": 1,
+      "Achievement": 0,
+      "Power": 0,
+      "Face": 0,
+      "Conformity": -1,
+      "Tradition": -1,
+      "Security": -1
+    },
+    "Achievement": {
+      "Universalism": -1,
+      "Benevolence": -1,
+      "Humility": -1,
+      "Self-Direction": 0,
+      "Stimulation": 0,
+      "Hedonism": 0,
+      "Achievement": 1,
+      "Power": 1,
+      "Face": 1,
+      "Conformity": 0,
+      "Tradition": 0,
+      "Security": 0
+    },
+    "Power": {
+      "Universalism": -1,
+      "Benevolence": -1,
+      "Humility": -1,
+      "Self-Direction": 0,
+      "Stimulation": 0,
+      "Hedonism": 0,
+      "Achievement": 1,
+      "Power": 1,
+      "Face": 1,
+      "Conformity": 0,
+      "Tradition": 0,
+      "Security": 0
+    },
+    "Face": {
+      "Universalism": -1,
+      "Benevolence": -1,
+      "Humility": -1,
+      "Self-Direction": 0,
+      "Stimulation": 0,
+      "Hedonism": 0,
+      "Achievement": 1,
+      "Power": 1,
+      "Face": 1,
+      "Conformity": 0,
+      "Tradition": 0,
+      "Security": 0
+    },
+    "Conformity": {
+      "Universalism": 0,
+      "Benevolence": 0,
+      "Humility": 0,
+      "Self-Direction": -1,
+      "Stimulation": -1,
+      "Hedonism": -1,
+      "Achievement": 0,
+      "Power": 0,
+      "Face": 0,
+      "Conformity": 1,
+      "Tradition": 1,
+      "Security": 1
+    },
+    "Tradition": {
+      "Universalism": 0,
+      "Benevolence": 0,
+      "Humility": 0,
+      "Self-Direction": -1,
+      "Stimulation": -1,
+      "Hedonism": -1,
+      "Achievement": 0,
+      "Power": 0,
+      "Face": 0,
+      "Conformity": 1,
+      "Tradition": 1,
+      "Security": 1
+    },
+    "Security": {
+      "Universalism": 0,
+      "Benevolence": 0,
+      "Humility": 0,
+      "Self-Direction": -1,
+      "Stimulation": -1,
+      "Hedonism": -1,
+      "Achievement": 0,
+      "Power": 0,
+      "Face": 0,
+      "Conformity": 1,
+      "Tradition": 1,
+      "Security": 1
+    }
+  }
+}
