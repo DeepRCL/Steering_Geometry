@@ -79,15 +79,34 @@ Subclasses `DatasetConstructionPipeline` from `value_bench/pipeline.py`, overrid
 
 **`validate.py`**
 
-Post-generation validation script. Samples the output CSV and uses an LLM judge to check whether each `negative_answer` inappropriately invokes the target value.
+Post-generation validation script. Samples the output CSV and uses an LLM judge to assess each `negative_answer` on four criteria:
+
+1. **`invokes_target_value`** — Does the negative invoke the target value in its reasoning?
+2. **`non_endorsing`** — Does it avoid implicitly endorsing the value? (Neutral and opposing answers both pass)
+3. **`rhetorically_coherent`** — Is it a genuine, topic-specific argument rather than a generic template?
+4. **`quality`** — Three-point assessment: `"poor"` / `"acceptable"` / `"good"`
+
+Derives a final **`caa_suitable`** flag: `True` only if `invokes_target_value=False` AND `non_endorsing=True` AND `rhetorically_coherent=True` AND `quality ≠ "poor"`.
+
+Results are appended row-by-row to the output CSV so interrupted runs can safely resume without data loss.
 
 ```bash
 python dataset_construction/Touche23-ValueEval/validate.py --sample 200
 python dataset_construction/Touche23-ValueEval/validate.py --input data/touche_dataset_negative_answer.csv --sample 0  # all rows
 python dataset_construction/Touche23-ValueEval/validate.py --value "Security: personal" --sample 50
+python dataset_construction/Touche23-ValueEval/validate.py --input data/touche_gemma4-v3.csv --output data/validation_report_v3.csv --sample 0
 ```
 
-Outputs a report CSV (`data/validation_report.csv`) with per-row judgments (`invokes_target_value`, `confidence`, `explanation`) and prints a summary showing overall contamination rate and a per-value breakdown.
+**Arguments:**
+- `--input` — Path to input CSV (default: `data/touche_dataset_negative_answer.csv`)
+- `--output` — Path for output report CSV (default: `data/validation_report.csv`)
+- `--sample` — Number of rows to validate; `0` = all rows (default: 200)
+- `--seed` — Random seed for sampling (default: 42)
+- `--value` — Filter to specific value label, e.g. `"Security: personal"` (optional)
+
+Outputs an extended report CSV with per-row judgments (`val_invokes_target_value`, `val_non_endorsing`, `val_rhetorically_coherent`, `val_quality`, `val_confidence`, `val_explanation`, `val_thinking`, `caa_suitable`) and prints a detailed summary showing per-criterion failure counts, quality distribution, and per-value CAA suitability breakdown.
+
+On resume, the script detects already-evaluated rows and skips them, appending only new results.
 
 **`run_pipelines.py`**
 
@@ -149,4 +168,4 @@ A01020,training,in favor of,Should we subsidize journalism?,Self-direction: thou
 1. Run `preprocessing.ipynb` to generate `data/touche_positive_only.csv` (if not already done)
 2. Configure `.env` with your model/device preferences
 3. Run `python dataset_construction/Touche23-ValueEval/run_pipelines.py` to generate the full dataset
-4. Run `python dataset_construction/Touche23-ValueEval/validate.py --sample 200` to check contamination rate before committing API budget to the full run
+4. Run `python dataset_construction/Touche23-ValueEval/validate.py --sample 200` to assess data quality on four criteria (contamination, endorsement, coherence, quality) and estimate CAA suitability rate before committing API budget to the full run
