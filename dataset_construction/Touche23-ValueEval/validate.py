@@ -24,11 +24,13 @@ Usage
 
 Options
 -------
---input    Path to generated CSV  (default: data/touche_dataset_negative_answer.csv)
---sample   Rows to validate; 0 = all rows  (default: 200)
---output   Path for the report CSV  (default: data/validation_report.csv)
---seed     Random seed for sampling  (default: 42)
---value    Validate only rows with this value label (optional filter)
+--input       Path to generated CSV  (default: data/touche_dataset_negative_answer.csv)
+--sample      Rows to validate; 0 = all rows  (default: 200)
+--output      Path for the report CSV  (default: data/validation_report.csv)
+--seed        Random seed for sampling  (default: 42)
+--value       Validate only rows with this value label (optional filter)
+--method      "single" (row-by-row, default) or "batch" (faster on GPU)
+--batch-size  Number of rows per LLM call in batch mode  (default: 10)
 """
 
 import argparse
@@ -228,13 +230,97 @@ class ValidationPipeline(DatasetConstructionPipeline):
         return (arg_id, value, neg64)
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _load_already_done(output_csv: Path) -> set[tuple]:
+        """Read the output CSV (if it exists) and return to the set of row keys
+        that have already been evaluated."""
+        already_done: set[tuple] = set()
+        if output_csv.exists() and output_csv.stat().st_size > 0:
+            try:
+                existing = pd.read_csv(output_csv)
+                for _, r in existing.iterrows():
+                    already_done.add(ValidationPipeline._row_key(r))
+                print(f"  Resume mode: {len(already_done)} rows already evaluated "
+                      f"in {output_csv.name}")
+            except Exception as exc:
+                print(f"  Warning: could not read existing output ({exc}). "
+                      "Starting fresh.")
+        return already_done
+
+    @staticmethod
+    def _parse_raw(raw: str) -> dict:
+        """Extract and normalise all judge fields from a raw LLM response."""
+        invokes     = _parse_bool(parse_json(raw, "invokes_target_value"))
+        non_end     = _parse_bool(parse_json(raw, "non_endorsing"))
+        coherent    = _parse_bool(parse_json(raw, "rhetorically_coherent"))
+        quality_raw = parse_json(raw, "quality")
+        confidence  = parse_json(raw, "confidence")
+        explanation = parse_json(raw, "explanation")
+        thinking    = parse_json(raw, "thinking")
+
+        quality_val = str(quality_raw).lower() if quality_raw else None
+        if quality_val not in ("poor", "acceptable", "good"):
+            quality_val = None
+
+        return dict(
+            invokes=invokes,
+            non_end=non_end,
+            coherent=coherent,
+            quality_val=quality_val,
+            confidence=confidence,
+            explanation=explanation,
+            thinking=thinking,
+        )
+
+    @staticmethod
+    def _build_result_row(row, parsed: dict, raw: str) -> dict:
+        """Merge original row data with parsed judge fields into a result dict."""
+        invokes     = parsed["invokes"]
+        non_end     = parsed["non_end"]
+        coherent    = parsed["coherent"]
+        quality_val = parsed["quality_val"]
+        caa = _derive_caa_suitable(invokes, non_end, coherent, quality_val)
+        return {
+            **row.to_dict(),
+            "val_invokes_target_value":  invokes,
+            "val_non_endorsing":         non_end,
+            "val_rhetorically_coherent": coherent,
+            "val_quality":               quality_val,
+            "val_confidence":            str(parsed["confidence"])  if parsed["confidence"]  else "",
+            "val_explanation":           str(parsed["explanation"]) if parsed["explanation"] else "",
+            "val_thinking":              str(parsed["thinking"])    if parsed["thinking"]    else "",
+            "val_raw_response":          raw,
+            "caa_suitable":              caa,
+        }
+
+    @staticmethod
+    def _label_for(result: dict) -> str:
+        """Return a short console status label for a result dict."""
+        invokes     = result["val_invokes_target_value"]
+        non_end     = result["val_non_endorsing"]
+        coherent    = result["val_rhetorically_coherent"]
+        quality_val = result["val_quality"]
+        caa         = result["caa_suitable"]
+        parse_failed = any(x is None for x in [invokes, non_end, coherent, quality_val])
+        if parse_failed:
+            return "ERR"
+        if caa:
+            return "OK"
+        reasons = []
+        if invokes:               reasons.append("INVOKES")
+        if not non_end:           reasons.append("ENDORSES")
+        if not coherent:          reasons.append("INCOHERENT")
+        if quality_val == "poor": reasons.append("POOR")
+        return "+".join(reasons) if reasons else "FAIL"
+
+    # ------------------------------------------------------------------
     def validate(
         self,
         df: pd.DataFrame,
         output_csv: Path,
     ) -> pd.DataFrame:
         """
-        Run validation on every row in *df*.
+        Run validation row-by-row on every pending row in *df*.
 
         Appends results row-by-row to *output_csv* immediately after each
         judgment so partial runs survive interruptions.  On restart, rows
@@ -247,19 +333,7 @@ class ValidationPipeline(DatasetConstructionPipeline):
           val_raw_response, caa_suitable
         """
         output_csv.parent.mkdir(parents=True, exist_ok=True)
-
-        # ── Resume: detect previously evaluated rows ──────────────────
-        already_done: set[tuple] = set()
-        if output_csv.exists() and output_csv.stat().st_size > 0:
-            try:
-                existing = pd.read_csv(output_csv)
-                for _, r in existing.iterrows():
-                    already_done.add(self._row_key(r))
-                print(f"  Resume mode: {len(already_done)} rows already evaluated "
-                      f"in {output_csv.name}")
-            except Exception as exc:
-                print(f"  Warning: could not read existing output ({exc}). "
-                      "Starting fresh.")
+        already_done = self._load_already_done(output_csv)
 
         total = len(df)
         n_skipped = 0
@@ -274,53 +348,11 @@ class ValidationPipeline(DatasetConstructionPipeline):
 
             print(f"  [{i:>4}/{total}]  value={row['value']!r}", end=" ... ", flush=True)
 
-            messages = self._build_messages(row)
-            raw = self._generate(messages)
+            raw    = self._generate(self._build_messages(row))
+            parsed = self._parse_raw(raw)
+            result = self._build_result_row(row, parsed, raw)
 
-            # ── Parse judge fields ────────────────────────────────────
-            invokes     = _parse_bool(parse_json(raw, "invokes_target_value"))
-            non_end     = _parse_bool(parse_json(raw, "non_endorsing"))
-            coherent    = _parse_bool(parse_json(raw, "rhetorically_coherent"))
-            quality_raw = parse_json(raw, "quality")
-            confidence  = parse_json(raw, "confidence")
-            explanation = parse_json(raw, "explanation")
-            thinking    = parse_json(raw, "thinking")
-
-            quality_val = str(quality_raw).lower() if quality_raw else None
-            if quality_val not in ("poor", "acceptable", "good"):
-                quality_val = None
-
-            caa = _derive_caa_suitable(invokes, non_end, coherent, quality_val)
-
-            # ── Console status line ───────────────────────────────────
-            parse_failed = any(
-                x is None for x in [invokes, non_end, coherent, quality_val]
-            )
-            if parse_failed:
-                label = "ERR"
-            elif caa:
-                label = "OK"
-            else:
-                reasons = []
-                if invokes:               reasons.append("INVOKES")
-                if not non_end:           reasons.append("ENDORSES")
-                if not coherent:          reasons.append("INCOHERENT")
-                if quality_val == "poor": reasons.append("POOR")
-                label = "+".join(reasons) if reasons else "FAIL"
-            print(label)
-
-            result = {
-                **row.to_dict(),
-                "val_invokes_target_value":  invokes,
-                "val_non_endorsing":         non_end,
-                "val_rhetorically_coherent": coherent,
-                "val_quality":               quality_val,
-                "val_confidence":            str(confidence)  if confidence  else "",
-                "val_explanation":           str(explanation) if explanation else "",
-                "val_thinking":              str(thinking)    if thinking    else "",
-                "val_raw_response":          raw,
-                "caa_suitable":              caa,
-            }
+            print(self._label_for(result))
 
             # ── Append this row to the output CSV immediately ─────────
             row_df = pd.DataFrame([result])
@@ -331,7 +363,79 @@ class ValidationPipeline(DatasetConstructionPipeline):
             print(f"\n  {n_skipped} row(s) skipped (already evaluated).")
         print(f"\nReport saved → {output_csv}")
 
-        # Return the full report including previously-evaluated rows
+        return pd.read_csv(output_csv)
+
+    # ------------------------------------------------------------------
+    def validate_batch(
+        self,
+        df: pd.DataFrame,
+        output_csv: Path,
+        batch_size: int = 10,
+    ) -> pd.DataFrame:
+        """
+        Run validation in GPU-friendly batches on every pending row in *df*.
+
+        Pending rows (those whose key is not yet in *output_csv*) are
+        collected first, then sent to _generate_batch() in chunks of
+        *batch_size*.  Results for each batch are appended to *output_csv*
+        immediately so interrupted runs can be safely resumed.
+
+        This is substantially faster than validate() on GPU because the
+        HuggingFace pipeline processes all sequences in a batch in parallel.
+        """
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        already_done = self._load_already_done(output_csv)
+
+        # ── Collect only rows not yet evaluated ───────────────────────
+        pending_rows = [
+            row for _, row in df.iterrows()
+            if self._row_key(row) not in already_done
+        ]
+        n_total   = len(df)
+        n_pending = len(pending_rows)
+        n_skipped = n_total - n_pending
+        if n_skipped:
+            print(f"  {n_skipped} row(s) already evaluated — processing {n_pending} pending rows.")
+        else:
+            print(f"  Processing all {n_pending} rows.")
+
+        if n_pending == 0:
+            print(f"\nNothing to do. Report at → {output_csv}")
+            return pd.read_csv(output_csv) if output_csv.exists() else df
+
+        total_batches = (n_pending + batch_size - 1) // batch_size
+
+        for batch_num, batch_start in enumerate(range(0, n_pending, batch_size), 1):
+            batch_rows = pending_rows[batch_start : batch_start + batch_size]
+            print(
+                f"\n  Batch {batch_num}/{total_batches}  "
+                f"({len(batch_rows)} rows)",
+                flush=True,
+            )
+
+            batch_messages = [self._build_messages(row) for row in batch_rows]
+
+            try:
+                raw_outputs = self._generate_batch(batch_messages, batch_size=len(batch_rows))
+            except Exception as exc:
+                print(f"  [WARN] Batch {batch_num} failed: {exc}")
+                raw_outputs = [f"ERROR: {exc}"] * len(batch_rows)
+
+            results = []
+            for row, raw in zip(batch_rows, raw_outputs):
+                parsed = self._parse_raw(raw)
+                result = self._build_result_row(row, parsed, raw)
+                label  = self._label_for(result)
+                print(f"    value={row['value']!r} ... {label}")
+                results.append(result)
+
+            # ── Flush this batch to disk ──────────────────────────────
+            batch_df   = pd.DataFrame(results)
+            file_is_new = not output_csv.exists() or output_csv.stat().st_size == 0
+            batch_df.to_csv(output_csv, mode="a", header=file_is_new, index=False)
+            print(f"  ✓ Batch {batch_num}/{total_batches} saved → {output_csv}")
+
+        print(f"\nReport saved → {output_csv}")
         return pd.read_csv(output_csv)
 
 
@@ -440,7 +544,8 @@ def main() -> None:
         description=(
             "Validate Touche23-ValueEval negative answers using an LLM-as-judge. "
             "Checks four criteria: contamination, endorsement, coherence, quality. "
-            "Results are appended row-by-row so interrupted runs can be resumed."
+            "Results are appended row-by-row (single) or batch-wise (batch) so "
+            "interrupted runs can always be safely resumed."
         )
     )
     parser.add_argument(
@@ -469,6 +574,18 @@ def main() -> None:
         "--value",
         default=None,
         help="Optional: validate only rows with this exact value label",
+    )
+    parser.add_argument(
+        "--method",
+        choices=["single", "batch"],
+        default="single",
+        help="single: one LLM call per row (default) | batch: one call per batch (faster on GPU)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=10,
+        help="Number of rows per LLM call in batch mode (default: 10)",
     )
     args = parser.parse_args()
 
@@ -516,8 +633,11 @@ def main() -> None:
     print("\nInitialising validation pipeline …")
     pipeline = ValidationPipeline()
 
-    print(f"Running LLM-as-judge on {len(df)} rows …\n")
-    report = pipeline.validate(df, output_path)
+    print(f"Running LLM-as-judge on {len(df)} rows … (method={args.method})\n")
+    if args.method == "batch":
+        report = pipeline.validate_batch(df, output_path, batch_size=args.batch_size)
+    else:
+        report = pipeline.validate(df, output_path)
 
     print_summary(report)
 
