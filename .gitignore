@@ -10,3 +10,6 @@ dataset_construction/value_bench/data/*
 *.out
 *.err
 dataset_construction/Touche23-ValueEval/data/
+CAA/Geometry/outputs/*
+
+*.pt
