@@ -3,9 +3,10 @@
 *.slurm
 logs/*
 .vscode/*
-dataset_construction/Touche23-ValueEval/data/touche_dataset_negative_answer-gemma4.csv
-dataset_construction/Touche23-ValueEval/data/touche_dataset_negative_answer-old.csv
-dataset_construction/data/debug/*
+dataset_construction/data/*
+dataset_construction/Touche23-ValueEval/data/*
+dataset_construction/value_bench/data/*
+
 *.out
 *.err
 dataset_construction/Touche23-ValueEval/data/
