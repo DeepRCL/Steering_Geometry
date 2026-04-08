@@ -6,9 +6,11 @@ logs/*
 dataset_construction/data/*
 dataset_construction/Touche23-ValueEval/data/*
 dataset_construction/value_bench/data/*
-
+.cursor/*
 *.out
 *.err
 dataset_construction/Touche23-ValueEval/data/
 CAA/Geometry/outputs/*
 SAE/outputs/*
+
+*.pt
