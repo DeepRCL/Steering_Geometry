@@ -1,163 +1,228 @@
-import os
 import json
-import torch
-import numpy as np
-from itertools import combinations
+import os
+from typing import Dict, Optional
+
 import matplotlib.pyplot as plt
-from typing import Dict, List, Tuple
+import numpy as np
+import torch
+import torch.nn.functional as F
+
 from .config import SCHWARTZ_CIRCUMPLEX_ORDER
+from .data_loader import DataLoader, PromptFormatter
+from .model_loader import ModelInfo
+from .steering.base import SteeringMethod
 
-def compute_cosine_consistency(activations_pos: Dict[str, Dict[str, torch.Tensor]], 
-                               activations_neg: Dict[str, Dict[str, torch.Tensor]]) -> float:
+
+def compute_mean_activation_separation(
+    activations_pos: Dict[str, torch.Tensor],
+    activations_neg: Dict[str, torch.Tensor],
+) -> float:
     """
-    Computes the mean pairwise cosine similarity of per-sample difference vectors
-    for a single value category at a single layer.
+    Compute a scale-normalized L2 separation for a single value at a single layer.
+
+    Each sample activation is first normalized to unit norm, then we compute
+    || mean(normalized_pos) - mean(normalized_neg) ||_2. This reduces the bias
+    toward later layers whose residual stream magnitudes are larger overall.
     """
-    # dict: sample_id -> tensor
-    sample_ids = list(activations_pos.keys())
-    if len(sample_ids) < 2:
+    shared_sample_ids = sorted(set(activations_pos.keys()) & set(activations_neg.keys()))
+    if not shared_sample_ids:
         return 0.0
-        
-    diff_vectors = []
-    for sid in sample_ids:
-        if sid in activations_neg:
-            d = activations_pos[sid] - activations_neg[sid]
-            diff_vectors.append(d)
-            
-    if len(diff_vectors) < 2:
-        return 0.0
-        
-    # Stack and normalize
-    diffs = torch.stack(diff_vectors)
-    norms = diffs.norm(dim=1, keepdim=True)
-    norms[norms == 0] = 1.0
-    normalized_diffs = diffs / norms
-    
-    # Compute dot products
-    sim_matrix = torch.mm(normalized_diffs, normalized_diffs.t())
-    
-    # Get upper triangle excluding diagonal
-    upper_tri = torch.triu(sim_matrix, diagonal=1)
-    num_pairs = (len(diffs) * (len(diffs) - 1)) / 2
-    
-    return float(upper_tri.sum() / num_pairs)
 
-def select_layer(config, 
-                 vectors: Dict[str, Dict[int, torch.Tensor]], 
-                 activations: Dict[str, Dict[str, Dict[int, Dict[str, torch.Tensor]]]]) -> int:
-    """
-    vectors: {value_name: {layer_idx: tensor}}
-    activations: {value_name: {'pos': {layer_idx: {sample_id: tensor}}, 'neg': ...}}
-    """
-    print("Computing layer selection metrics...")
-    
-    # Load relations
-    with open(config.relations_path, 'r') as f:
-        relations_data = json.load(f)
-        
-    rel_matrix = relations_data['basic_value_relationship_matrix']
-    
-    # List of layers
-    layers = list(vectors[SCHWARTZ_CIRCUMPLEX_ORDER[0]].keys())
-    layers.sort()
-    
-    consistency_scores = {}
-    discrimination_scores = {}
-    
-    for l_idx in layers:
-        # 1. Cosine Consistency
-        layer_const = []
-        for val in SCHWARTZ_CIRCUMPLEX_ORDER:
-            acts_pos = activations[val]['pos'][l_idx]
-            acts_neg = activations[val]['neg'][l_idx]
-            c = compute_cosine_consistency(acts_pos, acts_neg)
-            layer_const.append(c)
-        consistency_scores[l_idx] = float(np.mean(layer_const))
-        
-        # 2. Cross-Value Discrimination
-        d_scores = []
-        # Get all vectors for this layer
-        layer_vecs = {v: vectors[v][l_idx] for v in SCHWARTZ_CIRCUMPLEX_ORDER}
-        
-        checked_pairs = 0
-        for v1, v2 in combinations(SCHWARTZ_CIRCUMPLEX_ORDER, 2):
-            if v1 in rel_matrix and v2 in rel_matrix[v1]:
-                if rel_matrix[v1][v2] == -1: # Opposing values
-                    vec1 = layer_vecs[v1]
-                    vec2 = layer_vecs[v2]
-                    
-                    if vec1.norm() > 0 and vec2.norm() > 0:
-                        cos_sim = torch.nn.functional.cosine_similarity(vec1, vec2, dim=0).item()
-                        # Cosine distance = 1 - cos_sim. Higher handles separation better.
-                        cos_dist = 1.0 - cos_sim
-                        d_scores.append(cos_dist)
-                        checked_pairs += 1
-                        
-        discrimination_scores[l_idx] = float(np.mean(d_scores)) if d_scores else 0.0
+    pos_stack = torch.stack([activations_pos[sid] for sid in shared_sample_ids])
+    neg_stack = torch.stack([activations_neg[sid] for sid in shared_sample_ids])
 
-    # Normalize scores [0, 1]
-    const_vals = np.array([consistency_scores[l] for l in layers])
-    disc_vals = np.array([discrimination_scores[l] for l in layers])
-    
-    norm_const = (const_vals - const_vals.min()) / (const_vals.max() - const_vals.min() + 1e-9)
-    norm_disc = (disc_vals - disc_vals.min()) / (disc_vals.max() - disc_vals.min() + 1e-9)
-    
-    combined_scores = norm_const + norm_disc
-    
-    # Argmax
-    best_idx = int(np.argmax(combined_scores))
-    selected_layer = layers[best_idx]
-    
-    print(f"Selected layer based on metrics: {selected_layer}")
-    
-    # Save results
-    out_dir = config.subdir("layer_selection")
-    
-    scores_dict = {
-        l: {
-            "consistency": consistency_scores[l],
-            "discrimination": discrimination_scores[l],
-            "combined_normalized": float(combined_scores[i])
-        }
-        for i, l in enumerate(layers)
-    }
-    
+    pos_stack = pos_stack / pos_stack.norm(dim=1, keepdim=True).clamp_min(1e-12)
+    neg_stack = neg_stack / neg_stack.norm(dim=1, keepdim=True).clamp_min(1e-12)
+
+    pos_mean = pos_stack.mean(dim=0)
+    neg_mean = neg_stack.mean(dim=0)
+    return float(torch.norm(pos_mean - neg_mean, p=2).item())
+
+
+def _save_selection_metadata(out_dir: str, selected_layer: int, selection_metric: str, scores_dict: Dict):
     with open(os.path.join(out_dir, "layer_scores.json"), "w") as f:
         json.dump(scores_dict, f, indent=2)
-        
+
     with open(os.path.join(out_dir, "selected_layer.json"), "w") as f:
-        json.dump({"selected_layer": selected_layer}, f, indent=2)
-        
-    # Plotting
+        json.dump(
+            {
+                "selected_layer": selected_layer,
+                "selection_metric": selection_metric,
+            },
+            f,
+            indent=2,
+        )
+
+
+def _select_layer_by_normalized_l2(config, layers, activations) -> int:
+    mean_scores = {}
+    per_value_scores = {}
+
+    for layer_idx in layers:
+        layer_value_scores = {}
+        for value_name in SCHWARTZ_CIRCUMPLEX_ORDER:
+            acts_pos = activations[value_name]["pos"][layer_idx]
+            acts_neg = activations[value_name]["neg"][layer_idx]
+            layer_value_scores[value_name] = compute_mean_activation_separation(acts_pos, acts_neg)
+
+        per_value_scores[layer_idx] = layer_value_scores
+        mean_scores[layer_idx] = float(np.mean(list(layer_value_scores.values())))
+
+    selected_layer = max(layers, key=lambda layer_idx: mean_scores[layer_idx])
+    out_dir = config.subdir("layer_selection")
+
+    scores_dict = {
+        layer_idx: {
+            "mean_normalized_l2_separation": mean_scores[layer_idx],
+            "per_value_normalized_l2_separation": per_value_scores[layer_idx],
+        }
+        for layer_idx in layers
+    }
+    _save_selection_metadata(out_dir, selected_layer, "normalized_l2", scores_dict)
+
+    y_vals = np.array([mean_scores[layer_idx] for layer_idx in layers])
     plt.figure(figsize=(10, 6))
-    plt.plot(layers, const_vals, marker='o', label='Cosine Consistency')
-    plt.xlabel('Layer')
-    plt.ylabel('Score')
-    plt.title('Cosine Consistency by Layer')
-    plt.grid(True)
-    plt.savefig(os.path.join(out_dir, "cosine_consistency.png"), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    plt.figure(figsize=(10, 6))
-    plt.plot(layers, disc_vals, marker='s', color='orange', label='Cross-Value Discrimination')
-    plt.xlabel('Layer')
-    plt.ylabel('Score')
-    plt.title('Cross-Value Discrimination by Layer')
-    plt.grid(True)
-    plt.savefig(os.path.join(out_dir, "cross_value_discrimination.png"), dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    plt.figure(figsize=(10, 6))
-    plt.plot(layers, norm_const, marker='o', label='Normalized Consistency')
-    plt.plot(layers, norm_disc, marker='s', label='Normalized Discrimination')
-    plt.plot(layers, combined_scores, marker='^', label='Combined Score', linewidth=2, color='green')
-    plt.axvline(x=selected_layer, color='red', linestyle='--', label=f'Selected ({selected_layer})')
-    plt.xlabel('Layer')
-    plt.ylabel('Normalized Score')
-    plt.title('Layer Selection Metrics')
+    plt.plot(layers, y_vals, marker="o", linewidth=2, label="Mean Normalized L2 Separation")
+    plt.axvline(x=selected_layer, color="red", linestyle="--", label=f"Selected ({selected_layer})")
+    plt.xlabel("Layer")
+    plt.ylabel("Mean Normalized L2 Separation")
+    plt.title("Layer Selection by Mean Normalized L2 Separation")
     plt.legend()
     plt.grid(True)
-    plt.savefig(os.path.join(out_dir, "combined_metrics.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(os.path.join(out_dir, "mean_normalized_l2_separation.png"), dpi=300, bbox_inches="tight")
     plt.close()
-    
+
+    print(f"Selected layer based on mean normalized L2 separation: {selected_layer}")
     return selected_layer
+
+
+def _evaluate_value_accuracy_for_layer(
+    layer_idx: int,
+    alpha: float,
+    value_name: str,
+    vector: torch.Tensor,
+    data_loader: DataLoader,
+    model_info: ModelInfo,
+    steering_method: SteeringMethod,
+) -> float:
+    eval_instances = data_loader.get_eval_instances(value_name)
+    if not eval_instances:
+        return 0.0
+
+    formatter = PromptFormatter(model_info.tokenizer, model_info.is_instruct)
+    handles = steering_method.apply(model_info, layer_idx, vector, alpha)
+
+    try:
+        correct_count = 0
+        for inst in eval_instances:
+            tokens, a_id, b_id = formatter.format_eval_prompt(inst)
+            input_ids = torch.tensor([tokens]).to(model_info.device)
+
+            with torch.no_grad():
+                logits = model_info.model(input_ids).logits
+
+            last_logits = logits[0, -1, :]
+            prob_a = F.softmax(last_logits, dim=-1)[a_id].item()
+            prob_b = F.softmax(last_logits, dim=-1)[b_id].item()
+            chose_a = prob_a > prob_b
+            if chose_a == inst.pos_is_a:
+                correct_count += 1
+
+        return correct_count / len(eval_instances)
+    finally:
+        steering_method.cleanup(handles)
+
+
+def _select_layer_by_eval_accuracy(
+    config,
+    layers,
+    vectors,
+    data_loader: DataLoader,
+    model_info: ModelInfo,
+    steering_method: SteeringMethod,
+) -> int:
+    if data_loader is None or model_info is None or steering_method is None:
+        raise ValueError("Evaluation-based layer selection requires data_loader, model_info, and steering_method.")
+
+    model_info.model.eval()
+    mean_scores = {}
+    per_alpha_scores = {}
+
+    for layer_idx in layers:
+        alpha_scores = {}
+        for alpha in config.alpha_values:
+            per_value_acc = []
+            for value_name in SCHWARTZ_CIRCUMPLEX_ORDER:
+                acc = _evaluate_value_accuracy_for_layer(
+                    layer_idx=layer_idx,
+                    alpha=alpha,
+                    value_name=value_name,
+                    vector=vectors[value_name][layer_idx],
+                    data_loader=data_loader,
+                    model_info=model_info,
+                    steering_method=steering_method,
+                )
+                per_value_acc.append(acc)
+
+            alpha_scores[alpha] = float(np.mean(per_value_acc))
+
+        per_alpha_scores[layer_idx] = alpha_scores
+        mean_scores[layer_idx] = max(alpha_scores.values())
+
+    selected_layer = max(layers, key=lambda layer_idx: mean_scores[layer_idx])
+    best_alpha_per_layer = {
+        layer_idx: max(per_alpha_scores[layer_idx], key=per_alpha_scores[layer_idx].get)
+        for layer_idx in layers
+    }
+
+    out_dir = config.subdir("layer_selection")
+    scores_dict = {
+        layer_idx: {
+            "best_mean_eval_accuracy": mean_scores[layer_idx],
+            "best_alpha": best_alpha_per_layer[layer_idx],
+            "per_alpha_mean_eval_accuracy": per_alpha_scores[layer_idx],
+        }
+        for layer_idx in layers
+    }
+    _save_selection_metadata(out_dir, selected_layer, "eval_accuracy", scores_dict)
+
+    plt.figure(figsize=(10, 6))
+    for alpha in config.alpha_values:
+        y_vals = [per_alpha_scores[layer_idx][alpha] for layer_idx in layers]
+        plt.plot(layers, y_vals, marker="o", linewidth=1.5, label=f"alpha={alpha}")
+
+    plt.axvline(x=selected_layer, color="red", linestyle="--", label=f"Selected ({selected_layer})")
+    plt.xlabel("Layer")
+    plt.ylabel("Mean Eval Accuracy")
+    plt.title("Layer Selection by Held-out Evaluation Accuracy")
+    plt.legend()
+    plt.grid(True)
+    plt.savefig(os.path.join(out_dir, "eval_accuracy_by_layer.png"), dpi=300, bbox_inches="tight")
+    plt.close()
+
+    print(f"Selected layer based on held-out evaluation accuracy: {selected_layer}")
+    return selected_layer
+
+
+def select_layer(
+    config,
+    vectors: Dict[str, Dict[int, torch.Tensor]],
+    activations: Dict[str, Dict[str, Dict[int, Dict[str, torch.Tensor]]]],
+    data_loader: Optional[DataLoader] = None,
+    model_info: Optional[ModelInfo] = None,
+    steering_method: Optional[SteeringMethod] = None,
+) -> int:
+    print("Computing layer selection metrics...")
+
+    layers = list(vectors[SCHWARTZ_CIRCUMPLEX_ORDER[0]].keys())
+    layers.sort()
+
+    if config.layer_selection_method == "normalized_l2":
+        return _select_layer_by_normalized_l2(config, layers, activations)
+    if config.layer_selection_method == "eval_accuracy":
+        return _select_layer_by_eval_accuracy(config, layers, vectors, data_loader, model_info, steering_method)
+
+    raise ValueError(
+        f"Unknown layer selection method: {config.layer_selection_method}. "
+        "Expected one of: normalized_l2, eval_accuracy."
+    )
