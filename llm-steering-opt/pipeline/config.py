@@ -9,6 +9,65 @@ from typing import List, Optional
 from pathlib import Path
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Schwartz (2012) Refined Theory — circumplex order (counter-clockwise)
+# ─────────────────────────────────────────────────────────────────────────────
+SCHWARTZ_CIRCUMPLEX_ORDER: List[str] = [
+    "Self-direction: thought",
+    "Self-direction: action",
+    "Stimulation",
+    "Hedonism",
+    "Achievement",
+    "Power: dominance",
+    "Power: resources",
+    "Face",
+    "Security: personal",
+    "Security: societal",
+    "Tradition",
+    "Conformity: rules",
+    "Conformity: interpersonal",
+    "Humility",
+    "Benevolence: dependability",
+    "Benevolence: caring",
+    "Universalism: concern",
+    "Universalism: nature",
+    "Universalism: tolerance",
+    "Universalism: objectivity",
+]
+
+HIGHER_ORDER_GROUPS = {
+    "Openness to Change": [
+        "Self-direction: thought", "Self-direction: action", "Stimulation", "Hedonism",
+    ],
+    "Self-Enhancement": [
+        "Achievement", "Power: dominance", "Power: resources", "Face",
+    ],
+    "Conservation": [
+        "Security: personal", "Security: societal", "Tradition",
+        "Conformity: rules", "Conformity: interpersonal", "Humility",
+    ],
+    "Self-Transcendence": [
+        "Benevolence: dependability", "Benevolence: caring",
+        "Universalism: concern", "Universalism: nature",
+        "Universalism: tolerance", "Universalism: objectivity",
+    ],
+}
+
+GROUP_COLORS = {
+    "Openness to Change": "#2196F3",
+    "Self-Enhancement":   "#F44336",
+    "Conservation":       "#FF9800",
+    "Self-Transcendence": "#4CAF50",
+}
+
+
+def value_to_group(value: str) -> str:
+    for group, members in HIGHER_ORDER_GROUPS.items():
+        if value in members:
+            return group
+    return "Unknown"
+
+
 @dataclasses.dataclass
 class SteeringConfig:
     """
@@ -19,7 +78,7 @@ class SteeringConfig:
         - Dataset: path, split ratio, prompt formatting
         - Layer selection: sweep candidates and sample counts
         - Optimization: learning rate, iterations, norm constraints
-        - Evaluation: alpha (steering strength), metrics
+        - Evaluation: Spearman correlation with Schwartz theory
         - Output: where to save vectors and results
     """
 
@@ -30,8 +89,9 @@ class SteeringConfig:
 
     # ── Dataset ──────────────────────────────────────────────────────────
     dataset_path: str = "final_dataset_v3.csv"
-    train_ratio: float = 0.9       # Per-value stratified split ratio
-    random_seed: int = 42
+    relations_path: str = "schwartz_relations.json"
+    train_ratio: float = 0.2       # Per-value stratified split ratio
+    random_seed: int = 50
     use_chat_template: bool = True  # Use tokenizer's chat template for prompts
     # Fallback prompt template if chat template is unavailable or disabled
     prompt_template: str = (
@@ -44,13 +104,13 @@ class SteeringConfig:
     # Candidate layers to sweep; None = auto-compute from model depth
     layer_sweep_candidates: Optional[List[int]] = None
     # Number of candidate layers to auto-select (used when candidates=None)
-    layer_sweep_n_candidates: int = 8
-    # Training samples per value used during the layer sweep (keep small for speed)
-    layer_sweep_n_samples: int = 3
+    layer_sweep_n_candidates: int = 12
+    # Samples per value used during layer sweep activation extraction
+    layer_sweep_n_samples: int = 10
 
     # ── Optimization ─────────────────────────────────────────────────────
     lr: float = 0.1
-    max_iters: int = 30
+    max_iters: int = 20
     max_norm: Optional[float] = None   # None = unconstrained norm
     starting_norm: float = 1.0
     coldness: float = 0.7

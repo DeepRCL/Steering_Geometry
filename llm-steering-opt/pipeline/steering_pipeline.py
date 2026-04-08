@@ -1,24 +1,31 @@
 """
 Main steering pipeline: layer selection, per-value vector training, and evaluation.
+
+Layer selection uses mean normalized L2 separation of activations.
+Evaluation uses Spearman correlation between empirical steering-vector cosine
+similarities and the theoretical Schwartz value relationship matrix.
 """
 
 import dataclasses
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import torch
+import torch.nn.functional as F
 import numpy as np
+from scipy.stats import spearmanr, pearsonr
 from tqdm import tqdm
 
 # Ensure steering_opt is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import steering_opt
 
-from .config import SteeringConfig
+from .config import SteeringConfig, SCHWARTZ_CIRCUMPLEX_ORDER
 from . import data_utils
 
 
@@ -94,7 +101,7 @@ class SteeringPipeline:
                 self.train_rows, self.val_rows, self.values
             )
 
-    # ─── Layer Selection ─────────────────────────────────────────────────
+    # ─── Layer Selection (Mean Normalized L2 Separation) ────────────────
 
     def _get_sweep_candidates(self) -> List[int]:
         """Determine which layers to sweep."""
@@ -104,7 +111,6 @@ class SteeringPipeline:
         n_layers = self.model.config.num_hidden_layers
         n_cand = min(self.config.layer_sweep_n_candidates, n_layers)
 
-        # Sample layers from the 15%-85% depth range (skip very early/late)
         start = max(1, int(n_layers * 0.15))
         end = int(n_layers * 0.85)
         step = max(1, (end - start) // (n_cand - 1)) if n_cand > 1 else 1
@@ -112,100 +118,151 @@ class SteeringPipeline:
 
         return candidates
 
+    @staticmethod
+    def _compute_mean_activation_separation(
+        activations_pos: List[torch.Tensor],
+        activations_neg: List[torch.Tensor],
+    ) -> float:
+        """
+        Compute scale-normalized L2 separation for a single value at a single layer.
+
+        Each sample activation is L2-normalized to unit norm, then we compute
+        || mean(normalized_pos) - mean(normalized_neg) ||_2.
+        This reduces bias toward later layers with larger residual-stream magnitudes.
+        """
+        n = min(len(activations_pos), len(activations_neg))
+        if n == 0:
+            return 0.0
+
+        pos_stack = torch.stack(activations_pos[:n])
+        neg_stack = torch.stack(activations_neg[:n])
+
+        pos_stack = pos_stack / pos_stack.norm(dim=1, keepdim=True).clamp_min(1e-12)
+        neg_stack = neg_stack / neg_stack.norm(dim=1, keepdim=True).clamp_min(1e-12)
+
+        pos_mean = pos_stack.mean(dim=0)
+        neg_mean = neg_stack.mean(dim=0)
+        return float(torch.norm(pos_mean - neg_mean, p=2).item())
+
+    @torch.no_grad()
+    def _extract_last_token_activation(
+        self, text: str, layer: int
+    ) -> torch.Tensor:
+        """Run a forward pass and capture the last-token hidden state at `layer`."""
+        activs_list: list = []
+        hook = (layer, steering_opt.make_activs_hook_hf(activs_list))
+
+        input_ids = self.tokenizer(text, return_tensors="pt").input_ids.to(
+            self.config.device
+        )
+
+        with steering_opt.hf_hooks_contextmanager(self.model, [hook]):
+            self.model(input_ids)
+
+        last_token_activ = activs_list[0][0, -1, :].detach().cpu()
+        return last_token_activ
+
     def select_layer(self) -> int:
         """
-        Layer sweep: optimize a quick vector at each candidate layer using
-        a small subset, then pick the layer with the best validation metric.
+        Layer sweep using mean normalized L2 separation of activations.
+
+        For each candidate layer and each Schwartz value, extracts last-token
+        activations for positive and negative completions, L2-normalizes each
+        sample, and measures || mean(pos) - mean(neg) ||_2.
+        Picks the layer with the highest mean separation across values.
 
         Returns:
             Best layer index.
         """
         candidates = self._get_sweep_candidates()
-        self._log(f"Layer sweep over candidates: {candidates}")
+        self._log(f"Layer sweep (normalized L2 separation) over candidates: {candidates}")
 
-        results: Dict[int, float] = {}
+        sweep_values = [v for v in self.values if v in SCHWARTZ_CIRCUMPLEX_ORDER]
+        if not sweep_values:
+            sweep_values = self.values
 
-        pbar_layers = tqdm(candidates, desc="Layer Sweep", leave=True)
-        for layer in pbar_layers:
-            pbar_layers.set_description(f"Sweeping layer {layer}")
-            layer_scores = []
+        # activations[value][layer] = {"pos": [...], "neg": [...]}
+        activations: Dict[str, Dict[int, Dict[str, List[torch.Tensor]]]] = {}
 
-            # Use a subset of values for speed (max 5 values)
-            sweep_values = self.values[:5] if len(self.values) > 5 else self.values
+        self._log("  Extracting activations...")
+        pbar_values = tqdm(sweep_values, desc="Extracting activations", leave=True)
+        for value in pbar_values:
+            pbar_values.set_description(f"Activations: {value}")
+            train_value_rows = data_utils.get_rows_for_value(self.train_rows, value)
 
-            for value in sweep_values:
-                train_value_rows = data_utils.get_rows_for_value(
-                    self.train_rows, value
-                )
-                val_value_rows = data_utils.get_rows_for_value(
-                    self.val_rows, value
-                )
+            if not train_value_rows:
+                continue
 
-                if not train_value_rows or not val_value_rows:
-                    continue
+            rng = random.Random(self.config.random_seed)
+            sample_rows = rng.sample(
+                train_value_rows,
+                min(self.config.layer_sweep_n_samples, len(train_value_rows)),
+            )
 
-                # Create a small training set
-                datapoints = data_utils.create_datapoints(
-                    train_value_rows,
-                    tokenizer=self.tokenizer,
-                    use_chat_template=self.config.use_chat_template,
-                    prompt_template=self.config.prompt_template,
-                    n_samples=self.config.layer_sweep_n_samples,
-                    seed=self.config.random_seed,
-                )
-
-                if not datapoints:
-                    continue
-
-                # Quick optimization (fewer iters for speed)
-                try:
-                    vector, info = steering_opt.optimize_vector(
-                        self.model,
-                        datapoints,
-                        layer,
-                        tokenizer=self.tokenizer,
-                        use_transformer_lens=False,
-                        lr=self.config.lr,
-                        max_iters=min(15, self.config.max_iters),
-                        max_norm=self.config.max_norm,
-                        starting_norm=self.config.starting_norm,
-                        coldness=self.config.coldness,
-                        return_info=True,
+            activations[value] = {}
+            for layer in candidates:
+                pos_acts = []
+                neg_acts = []
+                for row in sample_rows:
+                    prompt = data_utils.format_prompt(
+                        row["question"],
+                        self.tokenizer,
+                        self.config.use_chat_template,
+                        self.config.prompt_template,
                     )
-                except Exception as e:
-                    self._log(f"    Warning: failed on value '{value}': {e}")
-                    continue
+                    pos_text = prompt + " " + row["positive_answer"]
+                    neg_text = prompt + " " + row["negative_answer"]
 
-                # Evaluate on a few val examples
-                val_datapoints = data_utils.create_datapoints(
-                    val_value_rows,
-                    tokenizer=self.tokenizer,
-                    use_chat_template=self.config.use_chat_template,
-                    prompt_template=self.config.prompt_template,
-                    n_samples=3,  # Just a few for speed
-                    seed=self.config.random_seed,
+                    pos_acts.append(self._extract_last_token_activation(pos_text, layer))
+                    neg_acts.append(self._extract_last_token_activation(neg_text, layer))
+
+                activations[value][layer] = {"pos": pos_acts, "neg": neg_acts}
+
+        mean_scores: Dict[int, float] = {}
+        per_value_scores: Dict[int, Dict[str, float]] = {}
+
+        for layer in candidates:
+            layer_value_scores = {}
+            for value in sweep_values:
+                if value not in activations:
+                    continue
+                acts = activations[value].get(layer)
+                if acts is None:
+                    continue
+                layer_value_scores[value] = self._compute_mean_activation_separation(
+                    acts["pos"], acts["neg"]
                 )
 
-                score = self._compute_delta_logprob(vector, layer, val_datapoints)
-                layer_scores.append(score)
+            per_value_scores[layer] = layer_value_scores
+            scores_list = list(layer_value_scores.values())
+            mean_scores[layer] = float(np.mean(scores_list)) if scores_list else 0.0
 
-            avg_score = np.mean(layer_scores) if layer_scores else float("-inf")
-            results[layer] = avg_score
-            self._log(f"    Layer {layer}: avg Δ log P = {avg_score:.4f}")
-
-        if not results:
-            # All layers failed — fall back to middle candidate
+        if not mean_scores or all(v == 0.0 for v in mean_scores.values()):
             best_layer = candidates[len(candidates) // 2]
-            self._log(f"\n  ⚠ All layers failed. Falling back to layer {best_layer}\n")
+            self._log(f"\n  Warning: all layers scored 0. Falling back to layer {best_layer}\n")
         else:
-            best_layer = max(results, key=results.get)
-            self._log(f"\n  ✓ Best layer: {best_layer} (Δ log P = {results[best_layer]:.4f})\n")
+            best_layer = max(candidates, key=lambda l: mean_scores.get(l, 0.0))
+            self._log(
+                f"\n  Best layer: {best_layer} "
+                f"(mean normalized L2 sep = {mean_scores[best_layer]:.4f})\n"
+            )
 
-        # Save sweep results
+        for layer in candidates:
+            self._log(f"    Layer {layer}: mean normalized L2 sep = {mean_scores.get(layer, 0):.4f}")
+
         sweep_path = os.path.join(self.config.output_dir, "layer_sweep.json")
+        scores_dict = {
+            str(layer): {
+                "mean_normalized_l2_separation": mean_scores.get(layer, 0),
+                "per_value_normalized_l2_separation": {
+                    k: round(v, 6) for k, v in per_value_scores.get(layer, {}).items()
+                },
+            }
+            for layer in candidates
+        }
         with open(sweep_path, "w") as f:
             json.dump(
-                {"candidates": candidates, "scores": {str(k): v for k, v in results.items()}, "best_layer": best_layer},
+                {"candidates": candidates, "scores": scores_dict, "best_layer": best_layer},
                 f, indent=2,
             )
 
@@ -296,65 +353,7 @@ class SteeringPipeline:
         self._log(f"\n  Trained {len(vectors)}/{len(self.values)} vectors\n")
         return vectors
 
-    # ─── Evaluation ──────────────────────────────────────────────────────
-
-    @torch.no_grad()
-    def _compute_delta_logprob(
-        self,
-        vector: torch.Tensor,
-        layer: int,
-        datapoints: List[steering_opt.TrainingDatapoint],
-    ) -> float:
-        """
-        Compute mean Δ log P across datapoints.
-
-        For each datapoint, computes:
-            Δ = [log P(dst | steered) - log P(dst | unsteered)]
-              + [log P(src | unsteered) - log P(src | steered)]
-
-        Positive Δ means steering is working (promoting dst, suppressing src).
-        """
-        if not datapoints:
-            return 0.0
-
-        alpha = self.config.alpha
-        vector = vector.detach()
-        deltas = []
-
-        for dp in datapoints:
-            delta = 0.0
-
-            # Evaluate dst_completions (should be promoted)
-            for comp in dp.dst_completions:
-                # Unsteered
-                unsteered_lp = steering_opt.get_completion_logprob_hf(
-                    self.model, dp.prompt, comp, self.tokenizer
-                )
-                # Steered
-                hook = (layer, steering_opt.make_steering_hook_hf(alpha * vector))
-                with steering_opt.hf_hooks_contextmanager(self.model, [hook]):
-                    steered_lp = steering_opt.get_completion_logprob_hf(
-                        self.model, dp.prompt, comp, self.tokenizer
-                    )
-                delta += (steered_lp - unsteered_lp).item()
-
-            # Evaluate src_completions (should be suppressed)
-            for comp in dp.src_completions:
-                unsteered_lp = steering_opt.get_completion_logprob_hf(
-                    self.model, dp.prompt, comp, self.tokenizer
-                )
-                hook = (layer, steering_opt.make_steering_hook_hf(alpha * vector))
-                with steering_opt.hf_hooks_contextmanager(self.model, [hook]):
-                    steered_lp = steering_opt.get_completion_logprob_hf(
-                        self.model, dp.prompt, comp, self.tokenizer
-                    )
-                # For src, we want steered_lp < unsteered_lp,
-                # so positive delta = unsteered - steered
-                delta += (unsteered_lp - steered_lp).item()
-
-            deltas.append(delta)
-
-        return float(np.mean(deltas))
+    # ─── Evaluation (Spearman Correlation) ──────────────────────────────
 
     @torch.no_grad()
     def _compute_accuracy(
@@ -392,26 +391,110 @@ class SteeringPipeline:
 
         return correct / len(datapoints)
 
+    def _compute_spearman(
+        self, vectors: Dict[str, torch.Tensor]
+    ) -> Dict[str, float]:
+        """
+        Compute Spearman (and Pearson) correlation between the empirical
+        pairwise cosine similarities of unit-normed steering vectors and
+        the theoretical Schwartz relationship matrix.
+
+        Returns dict with spearman_rho, spearman_p_value, pearson_r, etc.
+        """
+        ordered_values = [v for v in SCHWARTZ_CIRCUMPLEX_ORDER if v in vectors]
+        num_values = len(ordered_values)
+
+        unit_vectors: Dict[str, torch.Tensor] = {}
+        for val in ordered_values:
+            vec = vectors[val].detach().cpu().float()
+            norm = vec.norm()
+            unit_vectors[val] = vec / norm if norm > 0 else vec
+
+        empirical_sim = np.zeros((num_values, num_values))
+        for i, v1 in enumerate(ordered_values):
+            for j, v2 in enumerate(ordered_values):
+                empirical_sim[i, j] = F.cosine_similarity(
+                    unit_vectors[v1], unit_vectors[v2], dim=0
+                ).item()
+
+        with open(self.config.relations_path, "r") as f:
+            rel_data = json.load(f)
+        rel_matrix = rel_data["basic_value_relationship_matrix"]
+
+        theoretical_sim = np.zeros((num_values, num_values))
+        for i, v1 in enumerate(ordered_values):
+            for j, v2 in enumerate(ordered_values):
+                if v1 in rel_matrix and v2 in rel_matrix[v1]:
+                    theoretical_sim[i, j] = rel_matrix[v1][v2]
+
+        triu_indices = np.triu_indices(num_values, k=1)
+        emp_flat = empirical_sim[triu_indices]
+        theo_flat = theoretical_sim[triu_indices]
+
+        rho, p_val = spearmanr(emp_flat, theo_flat)
+        pearson_r, pearson_p = pearsonr(emp_flat, theo_flat)
+
+        return {
+            "spearman_rho": float(rho),
+            "spearman_p_value": float(p_val),
+            "pearson_r": float(pearson_r),
+            "pearson_p_value": float(pearson_p),
+            "num_value_pairs": int(len(emp_flat)),
+            "num_values_used": num_values,
+            "empirical_similarity_matrix": empirical_sim.tolist(),
+            "theoretical_similarity_matrix": theoretical_sim.tolist(),
+            "ordered_values": ordered_values,
+        }
+
     def evaluate(
         self, vectors: Dict[str, torch.Tensor], layer: int
     ) -> Dict[str, dict]:
         """
-        Evaluate all steering vectors on the validation set.
+        Evaluate steering vectors using:
+          1. Spearman correlation between empirical cosine similarities of
+             steering vectors and Schwartz theoretical relationship matrix.
+          2. Per-value accuracy on the held-out validation set.
 
         Returns:
-            Dict mapping value name -> {delta_logprob, accuracy, n_examples}.
+            Dict with per-value accuracy, overall accuracy, and Spearman metrics.
         """
-        self._log("Evaluating steering vectors on validation set")
+        self._log("Evaluating steering vectors")
         metrics: Dict[str, dict] = {}
 
-        all_deltas = []
+        # --- Spearman correlation (main metric) ---
+        self._log("  Computing Spearman correlation with Schwartz theory...")
+        spearman_metrics = self._compute_spearman(vectors)
+        metrics["__spearman__"] = {
+            "spearman_rho": spearman_metrics["spearman_rho"],
+            "spearman_p_value": spearman_metrics["spearman_p_value"],
+            "pearson_r": spearman_metrics["pearson_r"],
+            "pearson_p_value": spearman_metrics["pearson_p_value"],
+            "num_value_pairs": spearman_metrics["num_value_pairs"],
+            "num_values_used": spearman_metrics["num_values_used"],
+        }
+        self._log(
+            f"    Spearman rho = {spearman_metrics['spearman_rho']:.4f} "
+            f"(p = {spearman_metrics['spearman_p_value']:.4g})"
+        )
+        self._log(
+            f"    Pearson r    = {spearman_metrics['pearson_r']:.4f} "
+            f"(p = {spearman_metrics['pearson_p_value']:.4g})"
+        )
+
+        # Save detailed Spearman report separately
+        spearman_path = os.path.join(self.config.output_dir, "spearman_report.json")
+        with open(spearman_path, "w") as f:
+            json.dump(spearman_metrics, f, indent=2)
+
+        # --- Per-value accuracy ---
+        self._log("\n  Computing per-value steered accuracy...")
         all_accs = []
 
-        pbar_eval = tqdm(self.values, desc="Evaluating", leave=True)
+        pbar_eval = tqdm(self.values, desc="Evaluating accuracy", leave=True)
         for value in pbar_eval:
             if value not in vectors:
                 continue
-            
+
             pbar_eval.set_description(f"Eval: {value}")
             vector = vectors[value]
             val_value_rows = data_utils.get_rows_for_value(self.val_rows, value)
@@ -427,39 +510,34 @@ class SteeringPipeline:
                 prompt_template=self.config.prompt_template,
             )
 
-            self._log(f"  Evaluating: {value} ({len(val_datapoints)} val examples)...")
-
-            delta_lp = self._compute_delta_logprob(vector, layer, val_datapoints)
             accuracy = self._compute_accuracy(vector, layer, val_datapoints)
 
             metrics[value] = {
-                "delta_logprob": round(delta_lp, 4),
                 "accuracy": round(accuracy, 4),
                 "n_val_examples": len(val_datapoints),
             }
-            all_deltas.append(delta_lp)
             all_accs.append(accuracy)
 
             self._log(
-                f"    Δ log P = {delta_lp:+.4f} | "
-                f"Accuracy = {accuracy:.1%} | "
-                f"n = {len(val_datapoints)}"
+                f"    {value}: Accuracy = {accuracy:.1%} | n = {len(val_datapoints)}"
             )
 
-        # Overall metrics
-        if all_deltas:
+        if all_accs:
             metrics["__overall__"] = {
-                "mean_delta_logprob": round(float(np.mean(all_deltas)), 4),
                 "mean_accuracy": round(float(np.mean(all_accs)), 4),
-                "n_values": len(all_deltas),
+                "n_values": len(all_accs),
+                "spearman_rho": spearman_metrics["spearman_rho"],
+                "spearman_p_value": spearman_metrics["spearman_p_value"],
             }
             self._log(
-                f"\n  Overall: Δ log P = {np.mean(all_deltas):+.4f} | "
-                f"Accuracy = {np.mean(all_accs):.1%} "
-                f"(across {len(all_deltas)} values)\n"
+                f"\n  Overall: Accuracy = {np.mean(all_accs):.1%} "
+                f"(across {len(all_accs)} values)"
+            )
+            self._log(
+                f"  Spearman rho = {spearman_metrics['spearman_rho']:.4f} "
+                f"(p = {spearman_metrics['spearman_p_value']:.4g})\n"
             )
 
-        # Save metrics
         metrics_path = os.path.join(self.config.output_dir, "eval_metrics.json")
         with open(metrics_path, "w") as f:
             json.dump(metrics, f, indent=2)

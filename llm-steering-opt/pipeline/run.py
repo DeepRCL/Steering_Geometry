@@ -47,6 +47,8 @@ def parse_args():
     # Dataset
     parser.add_argument("--dataset_path", type=str, default=SteeringConfig.dataset_path,
                         help="Path to the CSV dataset")
+    parser.add_argument("--relations_path", type=str, default=SteeringConfig.relations_path,
+                        help="Path to schwartz_relations.json for Spearman evaluation")
     parser.add_argument("--train_ratio", type=float, default=SteeringConfig.train_ratio,
                         help="Per-value train split ratio (e.g. 0.6 = 60%% train, 40%% val)")
     parser.add_argument("--random_seed", type=int, default=SteeringConfig.random_seed)
@@ -102,6 +104,7 @@ def main():
         torch_dtype=args.torch_dtype,
         device=args.device,
         dataset_path=args.dataset_path,
+        relations_path=args.relations_path,
         train_ratio=args.train_ratio,
         random_seed=args.random_seed,
         use_chat_template=not args.no_chat_template,
