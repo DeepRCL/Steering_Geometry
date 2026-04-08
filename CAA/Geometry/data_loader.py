@@ -1,5 +1,6 @@
 import csv
 import random
+import numpy as np
 from dataclasses import dataclass
 from typing import List, Dict, Tuple
 from .config import SCHWARTZ_CIRCUMPLEX_ORDER
@@ -11,6 +12,7 @@ class ContrastivePair:
     question: str
     positive_answer: str
     negative_answer: str
+    pos_is_a: bool = True
 
 @dataclass
 class EvalInstance:
@@ -27,6 +29,7 @@ class DataLoader:
         self.eval_split = eval_split
         self.seed = seed
         self.rng = random.Random(seed)
+        self.np_rng = np.random.default_rng(seed)
         
         # Load and group data
         self.train_data: Dict[str, List[ContrastivePair]] = {val: [] for val in SCHWARTZ_CIRCUMPLEX_ORDER}
@@ -64,6 +67,9 @@ class DataLoader:
             
             train_pairs = pairs[num_eval:]
             eval_pairs = pairs[:num_eval]
+
+            for tp in train_pairs:
+                tp.pos_is_a = bool(self.np_rng.integers(0, 2))
             
             self.train_data[val] = train_pairs
             
@@ -101,11 +107,19 @@ class PromptFormatter:
         append the start of the answer, capturing the activation on the answer token.
         Returns: (pos_tokens, neg_tokens)
         """
-        pos_is_a = True # Arbitrary for extraction, let's say A is positive, B is negative
-        
         q_text = pair.question
-        a_text = pair.positive_answer
-        b_text = pair.negative_answer
+        pos_is_a = pair.pos_is_a
+
+        if pos_is_a:
+            a_text = pair.positive_answer
+            b_text = pair.negative_answer
+            pos_option = "A"
+            neg_option = "B"
+        else:
+            a_text = pair.negative_answer
+            b_text = pair.positive_answer
+            pos_option = "B"
+            neg_option = "A"
         
         prompt_text = (
             f"Question: {q_text}\n"
@@ -121,8 +135,8 @@ class PromptFormatter:
         else:
             base_prompt = prompt_text + "\nResponse:"
             
-        pos_prompt = base_prompt + " (A"
-        neg_prompt = base_prompt + " (B"
+        pos_prompt = base_prompt + f" ({pos_option}"
+        neg_prompt = base_prompt + f" ({neg_option}"
         
         pos_tokens = self.tokenizer.encode(pos_prompt, add_special_tokens=True)
         neg_tokens = self.tokenizer.encode(neg_prompt, add_special_tokens=True)

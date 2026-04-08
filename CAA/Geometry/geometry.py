@@ -4,13 +4,40 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from scipy.stats import spearmanr
-from sklearn.manifold import MDS
+from sklearn.decomposition import PCA
+from sklearn.manifold import MDS, TSNE
 import umap
 import matplotlib.pyplot as plt
 import seaborn as sns
 from typing import Dict
 
 from .config import PipelineConfig, SCHWARTZ_CIRCUMPLEX_ORDER, HIGHER_ORDER_GROUPS, value_to_group, GROUP_COLORS, safe_name
+
+
+def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
+    plt.figure(figsize=(10, 8))
+    for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
+        group = value_to_group(val)
+        color = GROUP_COLORS.get(group, "black")
+        plt.scatter(coords[i, 0], coords[i, 1], c=color, s=100)
+        plt.annotate(
+            val.split(":")[-1].strip(),
+            (coords[i, 0], coords[i, 1]),
+            xytext=(5, 5),
+            textcoords="offset points",
+            fontsize=9,
+        )
+
+    from matplotlib.lines import Line2D
+    legend_els = [
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markersize=10, label=g)
+        for g, c in GROUP_COLORS.items()
+    ]
+    plt.legend(handles=legend_els, loc="best")
+    plt.title(title)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300)
+    plt.close()
 
 def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     print("Running geometry analysis...")
@@ -80,29 +107,27 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     plt.savefig(os.path.join(out_dir, "theoretical_similarity_heatmap.png"), dpi=300)
     plt.close()
     
-    # UMAP 2D
     X = np.stack([unit_vectors[v].numpy() for v in SCHWARTZ_CIRCUMPLEX_ORDER])
+
+    # UMAP 2D
     reducer = umap.UMAP(n_components=2, metric='cosine', random_state=config.seed)
     X_umap = reducer.fit_transform(X)
-    
-    plt.figure(figsize=(10, 8))
-    for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
-        group = value_to_group(val)
-        color = GROUP_COLORS.get(group, "black")
-        plt.scatter(X_umap[i, 0], X_umap[i, 1], c=color, s=100)
-        plt.annotate(val.split(':')[-1].strip(), (X_umap[i, 0], X_umap[i, 1]), 
-                     xytext=(5, 5), textcoords='offset points', fontsize=9)
-        
-    # Legend
-    from matplotlib.lines import Line2D
-    legend_els = [Line2D([0], [0], marker='o', color='w', markerfacecolor=c, markersize=10, label=g) 
-                  for g, c in GROUP_COLORS.items()]
-    plt.legend(handles=legend_els, loc='best')
-    plt.title('UMAP 2D Projection of Steering Vectors')
-    plt.axis('equal')
-    plt.tight_layout()
-    plt.savefig(os.path.join(out_dir, "umap_2d.png"), dpi=300)
-    plt.close()
+    _plot_embedding_2d(os.path.join(out_dir, "umap_2d.png"), "UMAP 2D Projection of Steering Vectors", X_umap)
+
+    # PCA 2D
+    X_pca = PCA(n_components=2, random_state=config.seed).fit_transform(X)
+    _plot_embedding_2d(os.path.join(out_dir, "pca_2d.png"), "PCA 2D Projection of Steering Vectors", X_pca)
+
+    # t-SNE 2D
+    perplexity = min(5, max(2, len(SCHWARTZ_CIRCUMPLEX_ORDER) - 1))
+    X_tsne = TSNE(
+        n_components=2,
+        perplexity=perplexity,
+        init="pca",
+        learning_rate="auto",
+        random_state=config.seed,
+    ).fit_transform(X)
+    _plot_embedding_2d(os.path.join(out_dir, "tsne_2d.png"), "t-SNE 2D Projection of Steering Vectors", X_tsne)
     
     # MDS with Circumplex Overlay
     # Distance matrix = 1 - cosine similarity
@@ -110,7 +135,13 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     # Replace negative distances with 0 just in case
     dist_matrix[dist_matrix < 0] = 0
     
-    mds = MDS(n_components=2, dissimilarity='precomputed', random_state=config.seed, normalized_stress='auto')
+    mds = MDS(
+        n_components=2,
+        dissimilarity='precomputed',
+        random_state=config.seed,
+        normalized_stress='auto',
+        n_init=4,
+    )
     X_mds = mds.fit_transform(dist_matrix)
     
     # Theoretical points on a circle based on order

@@ -9,3 +9,4 @@ dataset_construction/data/debug/*
 *.out
 *.err
 dataset_construction/Touche23-ValueEval/data/
+CAA/Geometry/outputs/*

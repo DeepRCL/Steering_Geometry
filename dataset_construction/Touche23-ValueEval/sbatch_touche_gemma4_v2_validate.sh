@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #SBATCH --partition=main
-#SBATCH --gres=gpu:nvidia_b300_sxm6_ac:1
+#SBATCH --gres=gpu:nvidia_b300_sxm6_ac_2g.67gb:1
 #SBATCH --time=100:00:00
 #SBATCH --job-name=touche-gemma4-v2-val
 #SBATCH --output=touche_gemma4_v2_validate-%j.out
