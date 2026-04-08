@@ -51,6 +51,19 @@ def _center_vectors(vectors_all: Dict[str, Dict[int, torch.Tensor]]) -> Dict[str
     return centered
 
 
+def _renormalize_vectors(vectors_all: Dict[str, Dict[int, torch.Tensor]]) -> Dict[str, Dict[int, torch.Tensor]]:
+    renormed = {val: {} for val in SCHWARTZ_CIRCUMPLEX_ORDER}
+    layers = sorted(vectors_all[SCHWARTZ_CIRCUMPLEX_ORDER[0]].keys())
+
+    for layer_idx in layers:
+        for val in SCHWARTZ_CIRCUMPLEX_ORDER:
+            vec = vectors_all[val][layer_idx].float()
+            norm = vec.norm().clamp_min(1e-12)
+            renormed[val][layer_idx] = vec / norm
+
+    return renormed
+
+
 def _save_vectors(vectors_all: Dict[str, Dict[int, torch.Tensor]], output_dir: str, model_name_safe: str):
     vec_dir = os.path.join(output_dir, model_name_safe, "vectors")
     os.makedirs(vec_dir, exist_ok=True)
@@ -206,6 +219,7 @@ def run_centered_vector_experiment(
     source_output_dir: str,
     experiment_output_dir: str,
     alpha_values,
+    transform: str,
     run_geometry: bool,
 ):
     source_config = PipelineConfig(
@@ -226,15 +240,33 @@ def run_centered_vector_experiment(
     model_name_safe = source_config.model_name_safe
     selected_layer = _load_selected_layer(source_output_dir, model_name_safe)
     original_vectors = _load_vectors(source_output_dir, model_name_safe)
-    centered_vectors = _center_vectors(original_vectors)
-    _save_vectors(centered_vectors, experiment_output_dir, model_name_safe)
+    transformed_vectors = _center_vectors(original_vectors)
+    if transform == "centered_renorm":
+        transformed_vectors = _renormalize_vectors(transformed_vectors)
+    elif transform != "centered":
+        raise ValueError(f"Unknown transform: {transform}. Expected one of: centered, centered_renorm.")
+
+    _save_vectors(transformed_vectors, experiment_output_dir, model_name_safe)
     experiment_config.save()
+    metadata_path = os.path.join(experiment_output_dir, model_name_safe, "experiment_metadata.json")
+    os.makedirs(os.path.dirname(metadata_path), exist_ok=True)
+    with open(metadata_path, "w") as f:
+        json.dump(
+            {
+                "transform": transform,
+                "source_output_dir": source_output_dir,
+                "selected_layer": selected_layer,
+                "alpha_values": alpha_values,
+            },
+            f,
+            indent=2,
+        )
 
     model_info = load_model(model_name, device=experiment_config.device)
     data_loader = DataLoader(dataset_path, eval_split=experiment_config.eval_split, seed=experiment_config.seed)
     steering_method = CAASteeringMethod()
 
-    target_vectors = {val: centered_vectors[val][selected_layer] for val in SCHWARTZ_CIRCUMPLEX_ORDER}
+    target_vectors = {val: transformed_vectors[val][selected_layer] for val in SCHWARTZ_CIRCUMPLEX_ORDER}
     evaluate_steering(experiment_config, data_loader, model_info, steering_method, target_vectors, selected_layer)
 
     if run_geometry:
@@ -263,10 +295,12 @@ if __name__ == "__main__":
         help="Separate output root for centered-vector experiment; defaults to <source_output_dir>_centered",
     )
     parser.add_argument("--alpha", type=str, default="0.5,1.0,2.0,4.0", help="Comma-separated alphas")
+    parser.add_argument("--transform", type=str, default="centered", help="centered or centered_renorm")
     parser.add_argument("--run_geometry", action="store_true")
     args = parser.parse_args()
 
-    experiment_output_dir = args.experiment_output_dir or f"{args.source_output_dir}_centered"
+    default_suffix = "_centered_renorm" if args.transform == "centered_renorm" else "_centered"
+    experiment_output_dir = args.experiment_output_dir or f"{args.source_output_dir}{default_suffix}"
 
     run_centered_vector_experiment(
         model_name=args.model_name,
@@ -275,5 +309,6 @@ if __name__ == "__main__":
         source_output_dir=args.source_output_dir,
         experiment_output_dir=experiment_output_dir,
         alpha_values=[float(a) for a in args.alpha.split(",")],
+        transform=args.transform,
         run_geometry=args.run_geometry,
     )

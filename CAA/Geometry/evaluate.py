@@ -166,6 +166,50 @@ def evaluate_steering(
         mean_prob_positive_gain = prob_positive_gain.mean(axis=0)
         mean_margin_gain = margin_gain.mean(axis=0)
 
+        best_alpha_idx = int(np.argmax(mean_accuracy_gain))
+        best_alpha = alpha_labels[best_alpha_idx]
+        best_accuracy_gain = float(mean_accuracy_gain[best_alpha_idx])
+        best_mean_steered_accuracy = float(mean_steered_accuracy[best_alpha_idx])
+        mean_baseline_accuracy = float(baseline_accuracy.mean())
+
+        per_value_best_alpha = {}
+        for row_idx, value_name in enumerate(value_order):
+            value_best_idx = int(np.argmax(accuracy_gain[row_idx]))
+            value_best_alpha = alpha_labels[value_best_idx]
+            per_value_best_alpha[value_name] = {
+                "baseline_accuracy": float(baseline_accuracy[row_idx]),
+                "best_alpha": value_best_alpha,
+                "best_accuracy": float(steered_accuracy[row_idx, value_best_idx]),
+                "best_accuracy_gain_vs_baseline": float(accuracy_gain[row_idx, value_best_idx]),
+            }
+
+        evaluation_summary = {
+            "layer_idx": int(layer_idx),
+            "alpha_values": [float(alpha) for alpha in alpha_labels],
+            "mean_baseline_accuracy": mean_baseline_accuracy,
+            "mean_steered_accuracy_by_alpha": {
+                alpha: float(mean_steered_accuracy[idx]) for idx, alpha in enumerate(alpha_labels)
+            },
+            "mean_accuracy_gain_by_alpha": {
+                alpha: float(mean_accuracy_gain[idx]) for idx, alpha in enumerate(alpha_labels)
+            },
+            "mean_prob_positive_gain_by_alpha": {
+                alpha: float(mean_prob_positive_gain[idx]) for idx, alpha in enumerate(alpha_labels)
+            },
+            "mean_positive_margin_gain_by_alpha": {
+                alpha: float(mean_margin_gain[idx]) for idx, alpha in enumerate(alpha_labels)
+            },
+            "best_overall_alpha_by_mean_accuracy_gain": {
+                "alpha": best_alpha,
+                "mean_accuracy_gain_vs_baseline": best_accuracy_gain,
+                "mean_accuracy_at_alpha": best_mean_steered_accuracy,
+                "mean_baseline_accuracy": mean_baseline_accuracy,
+            },
+            "per_value_best_alpha_by_accuracy_gain": per_value_best_alpha,
+        }
+        with open(os.path.join(out_dir, "evaluation_summary.json"), "w") as f:
+            json.dump(evaluation_summary, f, indent=2)
+
         plt.figure(figsize=(8, 5))
         plt.axhline(
             y=float(baseline_accuracy.mean()),
@@ -236,5 +280,11 @@ def evaluate_steering(
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "positive_probability_gain_heatmap.png"), dpi=300, bbox_inches="tight")
         plt.close()
+
+        print(
+            "Best overall alpha by mean accuracy gain: "
+            f"{best_alpha} (gain={best_accuracy_gain:.4f}, "
+            f"baseline={mean_baseline_accuracy:.4f}, steered={best_mean_steered_accuracy:.4f})"
+        )
 
     print(f"Evaluation complete. Results saved to {out_dir}")

@@ -3,9 +3,12 @@ import json
 import numpy as np
 import torch
 import torch.nn.functional as F
-from scipy.stats import spearmanr
+from scipy.linalg import orthogonal_procrustes
+from scipy.spatial import procrustes
+from scipy.stats import pearsonr, spearmanr
 from sklearn.decomposition import PCA
 from sklearn.manifold import MDS, TSNE
+from sklearn.metrics import silhouette_score
 import umap
 import matplotlib.pyplot as plt
 import seaborn as sns
@@ -38,6 +41,10 @@ def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
     plt.close()
+
+
+def _circular_step_distance(i: int, j: int, n: int) -> int:
+    return min(abs(i - j), n - abs(i - j))
 
 def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     print("Running geometry analysis...")
@@ -80,6 +87,7 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     theo_flat = theoretical_sim[triu_indices]
     
     rho, p_val = spearmanr(emp_flat, theo_flat)
+    pearson_r, pearson_p = pearsonr(emp_flat, theo_flat)
     
     with open(os.path.join(out_dir, "spearman_report.json"), "w") as f:
         json.dump({
@@ -152,9 +160,69 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     # We can calculate optimal rotation
     X_circle = np.column_stack([np.cos(angles), np.sin(angles)])
     
-    from scipy.linalg import orthogonal_procrustes
     R, sca = orthogonal_procrustes(X_mds, X_circle)
     X_mds_aligned = X_mds.dot(R)
+
+    # Additional quantitative geometry metrics
+    group_labels = np.array([value_to_group(val) for val in SCHWARTZ_CIRCUMPLEX_ORDER])
+    clipped_dist_matrix = np.maximum(0.0, 1.0 - empirical_sim)
+    silhouette = silhouette_score(clipped_dist_matrix, group_labels, metric="precomputed")
+
+    same_group_mask = []
+    different_group_mask = []
+    circular_step_flat = []
+    neighbor_empirical = []
+    opposite_empirical = []
+    for i in range(num_values):
+        for j in range(i + 1, num_values):
+            same_group = value_to_group(SCHWARTZ_CIRCUMPLEX_ORDER[i]) == value_to_group(SCHWARTZ_CIRCUMPLEX_ORDER[j])
+            same_group_mask.append(same_group)
+            different_group_mask.append(not same_group)
+
+            step = _circular_step_distance(i, j, num_values)
+            circular_step_flat.append(step)
+            if step == 1:
+                neighbor_empirical.append(empirical_sim[i, j])
+            if step == num_values // 2:
+                opposite_empirical.append(empirical_sim[i, j])
+
+    same_group_mask = np.array(same_group_mask, dtype=bool)
+    different_group_mask = np.array(different_group_mask, dtype=bool)
+    circular_step_flat = np.array(circular_step_flat, dtype=float)
+
+    within_group_mean = float(emp_flat[same_group_mask].mean())
+    across_group_mean = float(emp_flat[different_group_mask].mean())
+    within_minus_across = within_group_mean - across_group_mean
+
+    neighbor_mean = float(np.mean(neighbor_empirical))
+    opposite_mean = float(np.mean(opposite_empirical))
+    neighbor_minus_opposite = neighbor_mean - opposite_mean
+    circular_distance_spearman, circular_distance_p = spearmanr(emp_flat, -circular_step_flat)
+
+    _, _, procrustes_disparity = procrustes(X_circle, X_mds)
+    procrustes_rmse = float(np.sqrt(np.mean(np.sum((X_mds_aligned - X_circle) ** 2, axis=1))))
+
+    geometry_metrics = {
+        "spearman_rho": float(rho),
+        "spearman_p_value": float(p_val),
+        "pearson_r": float(pearson_r),
+        "pearson_p_value": float(pearson_p),
+        "num_pairs": len(emp_flat),
+        "silhouette_by_higher_order_group": float(silhouette),
+        "within_group_mean_cosine": within_group_mean,
+        "across_group_mean_cosine": across_group_mean,
+        "within_minus_across_cosine": within_minus_across,
+        "neighbor_mean_cosine": neighbor_mean,
+        "opposite_mean_cosine": opposite_mean,
+        "neighbor_minus_opposite_cosine": neighbor_minus_opposite,
+        "circular_distance_spearman": float(circular_distance_spearman),
+        "circular_distance_p_value": float(circular_distance_p),
+        "procrustes_disparity": float(procrustes_disparity),
+        "procrustes_rmse_after_alignment": procrustes_rmse,
+        "mds_stress": float(mds.stress_),
+    }
+    with open(os.path.join(out_dir, "geometry_metrics.json"), "w") as f:
+        json.dump(geometry_metrics, f, indent=2)
     
     plt.figure(figsize=(12, 12))
     # Draw theoretical circle
@@ -189,6 +257,33 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     plt.grid(alpha=0.2)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "mds_circumplex.png"), dpi=300)
+    plt.close()
+
+    # Scatter plot comparing empirical similarities to theory labels directly.
+    plt.figure(figsize=(8, 5))
+    jitter = np.random.default_rng(config.seed).normal(0.0, 0.03, size=len(theo_flat))
+    plt.scatter(theo_flat + jitter, emp_flat, alpha=0.7, s=40)
+    plt.xticks([-1, 0, 1])
+    plt.xlabel("Theoretical Relationship")
+    plt.ylabel("Empirical Cosine Similarity")
+    plt.title("Empirical Similarity vs Theory")
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "theory_vs_empirical_scatter.png"), dpi=300)
+    plt.close()
+
+    # Pairwise difference heatmap to see where empirical structure overshoots or undershoots theory.
+    plt.figure(figsize=(12, 10))
+    sns.heatmap(
+        empirical_sim - theoretical_sim,
+        xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+        yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+        cmap="coolwarm",
+        center=0.0,
+    )
+    plt.title("Empirical Minus Theoretical Similarity")
+    plt.tight_layout()
+    plt.savefig(os.path.join(out_dir, "empirical_minus_theoretical_heatmap.png"), dpi=300)
     plt.close()
     
     print("Geometry analysis complete!")
