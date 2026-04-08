@@ -1,13 +1,22 @@
 """
 Post-generation validation for Touche23-ValueEval negative answers.
 
-Checks whether generated negative_answers inappropriately invoke the target
-value (Issues 1 & 2: value-invoking negatives, same-value opposite-policy).
+Judges each negative answer on four criteria using an LLM-as-judge:
+  1. invokes_target_value   — does the negative rely on the target value?
+  2. non_endorsing          — does it avoid implicitly endorsing the value?
+  3. rhetorically_coherent  — is it a genuine, topic-specific argument?
+  4. quality                — "poor" / "acceptable" / "good"
 
-For each sampled row an LLM judge decides:
-  "Does the negative answer invoke or rely on the target value?"
+Derives a final caa_suitable flag:
+  caa_suitable = invokes_target_value is False
+                 AND non_endorsing is True
+                 AND rhetorically_coherent is True
+                 AND quality != "poor"
 
-Results are saved to a CSV report and a summary is printed to the console.
+Results are appended row-by-row to the output CSV so that interrupted runs
+can be safely resumed without losing previously evaluated rows.  On restart
+the script detects already-evaluated rows by their (argument_id, value,
+negative_answer[:64]) key and skips them automatically.
 
 Usage
 -----
@@ -15,11 +24,13 @@ Usage
 
 Options
 -------
---input    Path to generated CSV  (default: data/touche_dataset_negative_answer.csv)
---sample   Rows to validate; 0 = all rows  (default: 200)
---output   Path for the report CSV  (default: data/validation_report.csv)
---seed     Random seed for sampling  (default: 42)
---value    Validate only rows with this value label (optional filter)
+--input       Path to generated CSV  (default: data/touche_dataset_negative_answer.csv)
+--sample      Rows to validate; 0 = all rows  (default: 200)
+--output      Path for the report CSV  (default: data/validation_report.csv)
+--seed        Random seed for sampling  (default: 42)
+--value       Validate only rows with this value label (optional filter)
+--method      "single" (row-by-row, default) or "batch" (faster on GPU)
+--batch-size  Number of rows per LLM call in batch mode  (default: 10)
 """
 
 import argparse
@@ -67,32 +78,72 @@ from utils import parse_json  # noqa: E402  (Touche23-ValueEval/utils.py is not 
 # ---------------------------------------------------------------------------
 
 VALIDATION_SYSTEM_PROMPT = """\
-You are a strict quality validator for an AI value-steering dataset.
+You are a strict quality validator for an AI value-steering dataset used for
+Contrastive Activation Addition (CAA). Each row pairs a positive answer
+(agreeing with a human value) and a negative answer (designed NOT to invoke
+that value).
 
-Your task: determine whether a negative argument inappropriately invokes the
-target value it is supposed to oppose.
+Judge the negative answer on FOUR criteria. All four use the same structure:
+a definition of when the field is true and when it is false.
 
-A negative argument INVOKES the target value if:
-- It appeals to the target value as a justification or reason.
-- It argues that the policy violates or fails to properly serve the target value
-  (i.e., it still treats the target value as important, even to criticise it).
-- The core concept of the target value appears in the argument's reasoning.
+──────────────────────────────────────────────────────────────────────────
+1. INVOKES_TARGET_VALUE
+   Does the negative invoke or rely on the target value in its reasoning?
+   → true  if it appeals to the target value as justification; if it argues
+            the policy violates or fails to serve the target value (treating
+            the value as important even to criticise it); or if the target
+            value's core concept appears in the argument's logic.
+   → false if it approaches the question from a completely different
+            perspective; or if the target value concept is entirely absent
+            from its reasoning and conclusion.
 
-A negative argument does NOT invoke the target value if:
-- It approaches the question from a completely different perspective or value.
-- The target value concept is entirely absent from its reasoning and conclusion.
+2. NON_ENDORSING
+   Does the negative avoid implicitly endorsing the target value?
+   Neutral and opposing answers both pass; only implicit endorsement fails.
+   → true  if its conclusion holds regardless of whether you accept the
+            target value; if it argues from a pragmatic, empirical, or
+            unrelated perspective whose validity is independent of the value.
+   → false if its conclusion only makes sense by accepting the target value
+            as important; if it implicitly treats the policy as wrong because
+            it fails the target value — even without naming the value directly.
 
-Respond ONLY with a JSON object — no extra text:
+3. RHETORICALLY_COHERENT
+   Does the negative make a genuine, topic-specific argument?
+   → true  if it makes a specific claim that directly responds to this
+            question or policy; if its reasoning is connected to the topic
+            rather than being a generic template that fits any debate.
+   → false if its argument could apply verbatim to any policy debate; if it
+            makes no specific claim about this particular question; or if it
+            is vague, incoherent, or entirely off-topic.
+
+4. QUALITY  (choose exactly one label)
+   → "good"       Specific, well-reasoned, directly engages this policy.
+                  A reader would find it persuasive on its own terms.
+   → "acceptable" Coherent and on-topic but generic enough to fit similar
+                  policies with little adjustment.
+   → "poor"       Vague, incoherent, off-topic, or adds no substantive claim
+                  beyond empty assertions.
+──────────────────────────────────────────────────────────────────────────
+
+First reason step by step in the "thinking" field (2–4 sentences), then give
+your four judgments.
+
+Respond ONLY with a JSON object — no extra text, no markdown fences:
 {
+  "thinking": "step-by-step reasoning before committing to answers",
   "invokes_target_value": true or false,
+  "non_endorsing": true or false,
+  "rhetorically_coherent": true or false,
+  "quality": "poor" | "acceptable" | "good",
   "confidence": "high" | "medium" | "low",
-  "explanation": "one sentence explaining the judgment"
+  "explanation": "one sentence summarising the overall judgment"
 }
 """
 
 VALIDATION_USER_PROMPT = """\
-Target Value: {value}
-Value Concept: {concept_line}
+Target Value  : {value}
+Value Concept : {concept_line}
+Question      : {question}
 
 Positive Answer (correctly invokes the target value):
   {positive_answer}
@@ -100,8 +151,44 @@ Positive Answer (correctly invokes the target value):
 Negative Answer (should NOT invoke the target value):
   {negative_answer}
 
-Does the negative answer invoke or rely on the target value "{value}"?
+Judge the negative answer on all four criteria for target value "{value}".
 """
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _parse_bool(raw_value) -> bool | None:
+    """Normalise a JSON boolean or string representation to Python bool."""
+    if isinstance(raw_value, bool):
+        return raw_value
+    if isinstance(raw_value, str):
+        if raw_value.lower() in ("true", "yes"):
+            return True
+        if raw_value.lower() in ("false", "no"):
+            return False
+    return None  # parse failure
+
+
+def _derive_caa_suitable(
+    invokes: bool | None,
+    non_endorsing: bool | None,
+    coherent: bool | None,
+    quality: str | None,
+) -> bool | None:
+    """
+    Derive the final suitability flag from the four judge criteria.
+    Returns None if any required field failed to parse.
+    """
+    if any(x is None for x in [invokes, non_endorsing, coherent, quality]):
+        return None
+    return (
+        invokes is False
+        and non_endorsing is True
+        and coherent is True
+        and quality != "poor"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -118,9 +205,11 @@ class ValidationPipeline(DatasetConstructionPipeline):
 
     def _build_messages(self, row, direction=None) -> list[dict]:
         concept = get_concept_line(str(row["value"]))
+        question = str(row.get("question", "")) if hasattr(row, "get") else ""
         user = VALIDATION_USER_PROMPT.format(
             value=row["value"],
             concept_line=concept,
+            question=question,
             positive_answer=row["positive_answer"],
             negative_answer=row["negative_answer"],
         )
@@ -129,6 +218,101 @@ class ValidationPipeline(DatasetConstructionPipeline):
             {"role": "user",   "content": user},
         ]
 
+    @staticmethod
+    def _row_key(row) -> tuple:
+        """
+        Composite key used to detect already-evaluated rows when resuming.
+        Uses argument_id (if present) + value + first 64 chars of negative_answer.
+        """
+        arg_id = str(row.get("argument_id", "")) if hasattr(row, "get") else ""
+        value  = str(row["value"])
+        neg64  = str(row["negative_answer"])[:64]
+        return (arg_id, value, neg64)
+
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _load_already_done(output_csv: Path) -> set[tuple]:
+        """Read the output CSV (if it exists) and return to the set of row keys
+        that have already been evaluated."""
+        already_done: set[tuple] = set()
+        if output_csv.exists() and output_csv.stat().st_size > 0:
+            try:
+                existing = pd.read_csv(output_csv)
+                for _, r in existing.iterrows():
+                    already_done.add(ValidationPipeline._row_key(r))
+                print(f"  Resume mode: {len(already_done)} rows already evaluated "
+                      f"in {output_csv.name}")
+            except Exception as exc:
+                print(f"  Warning: could not read existing output ({exc}). "
+                      "Starting fresh.")
+        return already_done
+
+    @staticmethod
+    def _parse_raw(raw: str) -> dict:
+        """Extract and normalise all judge fields from a raw LLM response."""
+        invokes     = _parse_bool(parse_json(raw, "invokes_target_value"))
+        non_end     = _parse_bool(parse_json(raw, "non_endorsing"))
+        coherent    = _parse_bool(parse_json(raw, "rhetorically_coherent"))
+        quality_raw = parse_json(raw, "quality")
+        confidence  = parse_json(raw, "confidence")
+        explanation = parse_json(raw, "explanation")
+        thinking    = parse_json(raw, "thinking")
+
+        quality_val = str(quality_raw).lower() if quality_raw else None
+        if quality_val not in ("poor", "acceptable", "good"):
+            quality_val = None
+
+        return dict(
+            invokes=invokes,
+            non_end=non_end,
+            coherent=coherent,
+            quality_val=quality_val,
+            confidence=confidence,
+            explanation=explanation,
+            thinking=thinking,
+        )
+
+    @staticmethod
+    def _build_result_row(row, parsed: dict, raw: str) -> dict:
+        """Merge original row data with parsed judge fields into a result dict."""
+        invokes     = parsed["invokes"]
+        non_end     = parsed["non_end"]
+        coherent    = parsed["coherent"]
+        quality_val = parsed["quality_val"]
+        caa = _derive_caa_suitable(invokes, non_end, coherent, quality_val)
+        return {
+            **row.to_dict(),
+            "val_invokes_target_value":  invokes,
+            "val_non_endorsing":         non_end,
+            "val_rhetorically_coherent": coherent,
+            "val_quality":               quality_val,
+            "val_confidence":            str(parsed["confidence"])  if parsed["confidence"]  else "",
+            "val_explanation":           str(parsed["explanation"]) if parsed["explanation"] else "",
+            "val_thinking":              str(parsed["thinking"])    if parsed["thinking"]    else "",
+            "val_raw_response":          raw,
+            "caa_suitable":              caa,
+        }
+
+    @staticmethod
+    def _label_for(result: dict) -> str:
+        """Return a short console status label for a result dict."""
+        invokes     = result["val_invokes_target_value"]
+        non_end     = result["val_non_endorsing"]
+        coherent    = result["val_rhetorically_coherent"]
+        quality_val = result["val_quality"]
+        caa         = result["caa_suitable"]
+        parse_failed = any(x is None for x in [invokes, non_end, coherent, quality_val])
+        if parse_failed:
+            return "ERR"
+        if caa:
+            return "OK"
+        reasons = []
+        if invokes:               reasons.append("INVOKES")
+        if not non_end:           reasons.append("ENDORSES")
+        if not coherent:          reasons.append("INCOHERENT")
+        if quality_val == "poor": reasons.append("POOR")
+        return "+".join(reasons) if reasons else "FAIL"
+
     # ------------------------------------------------------------------
     def validate(
         self,
@@ -136,51 +320,123 @@ class ValidationPipeline(DatasetConstructionPipeline):
         output_csv: Path,
     ) -> pd.DataFrame:
         """
-        Run validation on every row in *df*.
+        Run validation row-by-row on every pending row in *df*.
 
-        Adds columns: invokes_target_value, confidence, explanation, raw_response.
-        Saves the full report to *output_csv* and returns it.
+        Appends results row-by-row to *output_csv* immediately after each
+        judgment so partial runs survive interruptions.  On restart, rows
+        whose key already appears in the output file are skipped.
+
+        Output columns added to the input dataset:
+          val_invokes_target_value, val_non_endorsing,
+          val_rhetorically_coherent, val_quality,
+          val_confidence, val_explanation, val_thinking,
+          val_raw_response, caa_suitable
         """
-        results: list[dict] = []
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        already_done = self._load_already_done(output_csv)
+
         total = len(df)
+        n_skipped = 0
 
         for i, (_, row) in enumerate(df.iterrows(), 1):
+            key = self._row_key(row)
+
+            if key in already_done:
+                n_skipped += 1
+                print(f"  [{i:>4}/{total}]  value={row['value']!r} ... SKIP")
+                continue
+
             print(f"  [{i:>4}/{total}]  value={row['value']!r}", end=" ... ", flush=True)
 
-            messages = self._build_messages(row)
-            raw = self._generate(messages)
+            raw    = self._generate(self._build_messages(row))
+            parsed = self._parse_raw(raw)
+            result = self._build_result_row(row, parsed, raw)
 
-            invokes  = parse_json(raw, "invokes_target_value")
-            confidence = parse_json(raw, "confidence")
-            explanation = parse_json(raw, "explanation")
+            print(self._label_for(result))
 
-            # Normalise the bool field (parse_json returns actual Python bool
-            # when JSON contains true/false; only falls back to "..." on error)
-            if isinstance(invokes, bool):
-                invokes_bool = invokes
-            elif isinstance(invokes, str) and invokes.lower() in ("true", "yes"):
-                invokes_bool = True
-            elif isinstance(invokes, str) and invokes.lower() in ("false", "no"):
-                invokes_bool = False
-            else:
-                invokes_bool = None  # parse failure
+            # ── Append this row to the output CSV immediately ─────────
+            row_df = pd.DataFrame([result])
+            file_is_new = not output_csv.exists() or output_csv.stat().st_size == 0
+            row_df.to_csv(output_csv, mode="a", header=file_is_new, index=False)
 
-            label = "INVOKES" if invokes_bool else ("OK" if invokes_bool is False else "ERR")
-            print(label)
-
-            results.append({
-                **row.to_dict(),
-                "invokes_target_value": invokes_bool,
-                "confidence":           str(confidence) if confidence else "",
-                "explanation":          str(explanation) if explanation else "",
-                "raw_response":         raw,
-            })
-
-        report = pd.DataFrame(results)
-        output_csv.parent.mkdir(parents=True, exist_ok=True)
-        report.to_csv(output_csv, index=False)
+        if n_skipped:
+            print(f"\n  {n_skipped} row(s) skipped (already evaluated).")
         print(f"\nReport saved → {output_csv}")
-        return report
+
+        return pd.read_csv(output_csv)
+
+    # ------------------------------------------------------------------
+    def validate_batch(
+        self,
+        df: pd.DataFrame,
+        output_csv: Path,
+        batch_size: int = 10,
+    ) -> pd.DataFrame:
+        """
+        Run validation in GPU-friendly batches on every pending row in *df*.
+
+        Pending rows (those whose key is not yet in *output_csv*) are
+        collected first, then sent to _generate_batch() in chunks of
+        *batch_size*.  Results for each batch are appended to *output_csv*
+        immediately so interrupted runs can be safely resumed.
+
+        This is substantially faster than validate() on GPU because the
+        HuggingFace pipeline processes all sequences in a batch in parallel.
+        """
+        output_csv.parent.mkdir(parents=True, exist_ok=True)
+        already_done = self._load_already_done(output_csv)
+
+        # ── Collect only rows not yet evaluated ───────────────────────
+        pending_rows = [
+            row for _, row in df.iterrows()
+            if self._row_key(row) not in already_done
+        ]
+        n_total   = len(df)
+        n_pending = len(pending_rows)
+        n_skipped = n_total - n_pending
+        if n_skipped:
+            print(f"  {n_skipped} row(s) already evaluated — processing {n_pending} pending rows.")
+        else:
+            print(f"  Processing all {n_pending} rows.")
+
+        if n_pending == 0:
+            print(f"\nNothing to do. Report at → {output_csv}")
+            return pd.read_csv(output_csv) if output_csv.exists() else df
+
+        total_batches = (n_pending + batch_size - 1) // batch_size
+
+        for batch_num, batch_start in enumerate(range(0, n_pending, batch_size), 1):
+            batch_rows = pending_rows[batch_start : batch_start + batch_size]
+            print(
+                f"\n  Batch {batch_num}/{total_batches}  "
+                f"({len(batch_rows)} rows)",
+                flush=True,
+            )
+
+            batch_messages = [self._build_messages(row) for row in batch_rows]
+
+            try:
+                raw_outputs = self._generate_batch(batch_messages, batch_size=len(batch_rows))
+            except Exception as exc:
+                print(f"  [WARN] Batch {batch_num} failed: {exc}")
+                raw_outputs = [f"ERROR: {exc}"] * len(batch_rows)
+
+            results = []
+            for row, raw in zip(batch_rows, raw_outputs):
+                parsed = self._parse_raw(raw)
+                result = self._build_result_row(row, parsed, raw)
+                label  = self._label_for(result)
+                print(f"    value={row['value']!r} ... {label}")
+                results.append(result)
+
+            # ── Flush this batch to disk ──────────────────────────────
+            batch_df   = pd.DataFrame(results)
+            file_is_new = not output_csv.exists() or output_csv.stat().st_size == 0
+            batch_df.to_csv(output_csv, mode="a", header=file_is_new, index=False)
+            print(f"  ✓ Batch {batch_num}/{total_batches} saved → {output_csv}")
+
+        print(f"\nReport saved → {output_csv}")
+        return pd.read_csv(output_csv)
 
 
 # ---------------------------------------------------------------------------
@@ -188,38 +444,91 @@ class ValidationPipeline(DatasetConstructionPipeline):
 # ---------------------------------------------------------------------------
 
 def print_summary(report: pd.DataFrame) -> None:
-    valid = report[report["invokes_target_value"].notna()]
+    # Work only on rows that have validation results
+    val_cols = [
+        "val_invokes_target_value",
+        "val_non_endorsing",
+        "val_rhetorically_coherent",
+        "val_quality",
+        "caa_suitable",
+    ]
+    missing = [c for c in val_cols if c not in report.columns]
+    if missing:
+        print(f"Summary skipped — missing columns: {missing}")
+        return
+
+    # Rows where at least caa_suitable was resolved
+    valid = report[report["caa_suitable"].notna()].copy()
     if valid.empty:
         print("No valid judgments to summarise.")
         return
 
-    total  = len(valid)
-    n_bad  = int(valid["invokes_target_value"].sum())
-    rate   = 100 * n_bad / total
+    total = len(valid)
+
+    def _count(col, val=True):
+        if col not in valid.columns:
+            return 0
+        return int((valid[col] == val).sum())
+
+    n_invokes   = _count("val_invokes_target_value", True)
+    n_endorses  = _count("val_non_endorsing", False)
+    n_incoherent = _count("val_rhetorically_coherent", False)
+    n_poor      = _count("val_quality", "poor")
+    n_suitable  = _count("caa_suitable", True)
+
+    n_acceptable = _count("val_quality", "acceptable")
+    n_good       = _count("val_quality", "good")
+
+    n_err = int(report["caa_suitable"].isna().sum())
+
+    pct = lambda n: f"{100 * n / total:.1f}%"  # noqa: E731
 
     print("\n" + "=" * 70)
     print("VALIDATION SUMMARY")
     print("=" * 70)
-    print(f"  Rows validated : {total}")
-    print(f"  Contaminated   : {n_bad}  ({rate:.1f}%)")
-    print(f"  Clean          : {total - n_bad}  ({100 - rate:.1f}%)")
+    print(f"  Rows evaluated              : {total}")
+    print()
+    print(f"  Contaminated  (invokes val) : {n_invokes:>4}  ({pct(n_invokes)})")
+    print(f"  Endorses val  (non_endorsing=F) : {n_endorses:>4}  ({pct(n_endorses)})")
+    print(f"  Incoherent                  : {n_incoherent:>4}  ({pct(n_incoherent)})")
+    print(f"  Poor quality                : {n_poor:>4}  ({pct(n_poor)})")
+    if n_err:
+        print(f"  Parse errors                : {n_err:>4}")
+    print()
+    print(f"  ── CAA-suitable (all ✓)     : {n_suitable:>4}  ({pct(n_suitable)})")
+    print()
+    print(f"  Quality distribution:")
+    print(f"    good        {n_good:>4}  ({pct(n_good)})")
+    print(f"    acceptable  {n_acceptable:>4}  ({pct(n_acceptable)})")
+    print(f"    poor        {n_poor:>4}  ({pct(n_poor)})")
 
-    if report["invokes_target_value"].isna().any():
-        n_err = report["invokes_target_value"].isna().sum()
-        print(f"  Parse errors   : {n_err}")
-
-    # Per-value breakdown (only show values with at least 1 contaminated row)
-    if n_bad > 0:
+    # Per-value contamination breakdown
+    if n_invokes > 0 and "value" in valid.columns:
         print("\n  Contamination by value (worst first):")
         breakdown = (
-            valid.groupby("value")["invokes_target_value"]
+            valid.groupby("value")["val_invokes_target_value"]
             .agg(["sum", "count"])
             .rename(columns={"sum": "bad", "count": "n"})
         )
         breakdown["rate"] = 100 * breakdown["bad"] / breakdown["n"]
         breakdown = breakdown[breakdown["bad"] > 0].sort_values("rate", ascending=False)
         for value, row in breakdown.iterrows():
-            print(f"    {value:<42s}  {int(row['bad'])}/{int(row['n'])}  ({row['rate']:.0f}%)")
+            print(f"    {value:<42s}  {int(row['bad'])}/{int(row['n'])}  "
+                  f"({row['rate']:.0f}%)")
+
+    # Per-value CAA suitability breakdown
+    if "value" in valid.columns:
+        print("\n  CAA suitability by value (worst first):")
+        suit = (
+            valid.groupby("value")["caa_suitable"]
+            .agg(["sum", "count"])
+            .rename(columns={"sum": "ok", "count": "n"})
+        )
+        suit["rate"] = 100 * suit["ok"] / suit["n"]
+        suit = suit.sort_values("rate", ascending=True)
+        for value, row in suit.iterrows():
+            print(f"    {value:<42s}  {int(row['ok'])}/{int(row['n'])}  "
+                  f"({row['rate']:.0f}%)")
 
     print("=" * 70)
 
@@ -232,7 +541,12 @@ def main() -> None:
     _DATA_DIR = _HERE.parent / "data"
 
     parser = argparse.ArgumentParser(
-        description="Validate Touche23-ValueEval negative answers for value invocation."
+        description=(
+            "Validate Touche23-ValueEval negative answers using an LLM-as-judge. "
+            "Checks four criteria: contamination, endorsement, coherence, quality. "
+            "Results are appended row-by-row (single) or batch-wise (batch) so "
+            "interrupted runs can always be safely resumed."
+        )
     )
     parser.add_argument(
         "--input",
@@ -260,6 +574,18 @@ def main() -> None:
         "--value",
         default=None,
         help="Optional: validate only rows with this exact value label",
+    )
+    parser.add_argument(
+        "--method",
+        choices=["single", "batch"],
+        default="single",
+        help="single: one LLM call per row (default) | batch: one call per batch (faster on GPU)",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=10,
+        help="Number of rows per LLM call in batch mode (default: 10)",
     )
     args = parser.parse_args()
 
@@ -307,8 +633,11 @@ def main() -> None:
     print("\nInitialising validation pipeline …")
     pipeline = ValidationPipeline()
 
-    print(f"Running LLM-as-judge on {len(df)} rows …\n")
-    report = pipeline.validate(df, output_path)
+    print(f"Running LLM-as-judge on {len(df)} rows … (method={args.method})\n")
+    if args.method == "batch":
+        report = pipeline.validate_batch(df, output_path, batch_size=args.batch_size)
+    else:
+        report = pipeline.validate(df, output_path)
 
     print_summary(report)
 
