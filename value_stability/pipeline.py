@@ -13,7 +13,7 @@ from tqdm import tqdm
 from transformers import pipeline as hf_pipeline
 
 import config as root_config
-from utils import parse_json
+from value_stability.parser import parse_perturbation_output
 import value_stability.config as vs_config
 from value_stability.prompts import PERTURBATION_SYSTEM_PROMPT, PERTURBATION_TYPES
 
@@ -43,12 +43,12 @@ class PerturbationPipeline:
     ):
         self.max_new_tokens = max_new_tokens
         print(f"Loading model: {model_id}")
-        
+
         self.pipe = hf_pipeline(
             "text-generation",
             model=model_id,
             device_map=device_map,
-            dtype=torch.bfloat16,
+            # dtype=torch.bfloat16,
             model_kwargs={
                 "attn_implementation": "sdpa",
             },
@@ -59,11 +59,12 @@ class PerturbationPipeline:
 
     def _generate(self, messages: list[dict]) -> str:
         outputs = self.pipe(
-            text=messages,
+            messages,
             max_new_tokens=self.max_new_tokens,
             do_sample=False,
             return_full_text=False,
         )
+        print("Generated text: ", outputs[0]["generated_text"].strip())
         return outputs[0]["generated_text"].strip()
 
     def _build_messages(self, row: pd.Series, perturbation_type: str) -> list[dict]:
@@ -80,18 +81,20 @@ class PerturbationPipeline:
         ]
 
     def _load_pending(
-        self, input_csv: Path, output_csv: Path, output_col: str
+        self, input_csv: Path, output_csv: Path, output_col: str, output_cols: list[str]
     ) -> tuple[pd.DataFrame, list[int]]:
-        """Return df with output_col added, and indices of rows still missing that column."""
+        """Return df with all output_cols added, and indices of rows still missing the primary column."""
         df = pd.read_csv(input_csv)
-        if output_col not in df.columns:
-            df[output_col] = None
-        df[output_col] = df[output_col].astype(object)
+        for col in output_cols:
+            if col not in df.columns:
+                df[col] = None
+            df[col] = df[col].astype(object)
 
         if output_csv.exists():
             saved = pd.read_csv(output_csv)
-            if output_col in saved.columns:
-                df[output_col] = saved[output_col]
+            for col in output_cols:
+                if col in saved.columns:
+                    df[col] = saved[col]
 
         pending = df.index[df[output_col].isnull()].tolist()
         return df, pending
@@ -103,11 +106,16 @@ class PerturbationPipeline:
         output_csv: str | Path,
     ) -> pd.DataFrame:
         if perturbation_type not in PERTURBATION_TYPES:
-            raise ValueError(f"Unknown perturbation type '{perturbation_type}'. Choose from {list(PERTURBATION_TYPES)}")
+            raise ValueError(
+                f"Unknown perturbation type '{perturbation_type}'. "
+                f"Choose from {list(PERTURBATION_TYPES)}"
+            )
 
         input_csv, output_csv = Path(input_csv), Path(output_csv)
-        output_col = PERTURBATION_TYPES[perturbation_type]["output_col"]
-        df, pending_idx = self._load_pending(input_csv, output_csv, output_col)
+        cfg = PERTURBATION_TYPES[perturbation_type]
+        output_col  = cfg["output_col"]
+        output_cols = cfg["output_cols"]
+        df, pending_idx = self._load_pending(input_csv, output_csv, output_col, output_cols)
 
         print(f"[{perturbation_type}] Rows to process: {len(pending_idx)} → {output_csv.name}")
 
@@ -115,11 +123,13 @@ class PerturbationPipeline:
             row = df.loc[idx]
             try:
                 raw = self._generate(self._build_messages(row, perturbation_type))
-                parsed = parse_json(raw, output_col)
-                df.at[idx, output_col] = parsed if parsed is not None else raw
+                parsed = parse_perturbation_output(raw, output_cols)
+                for col, val in parsed.items():
+                    df.at[idx, col] = val if val is not None else (raw if col == output_col else "")
             except Exception as e:
                 tqdm.write(f"[WARN] Row {idx} failed: {e}")
-                df.at[idx, output_col] = f"ERROR: {e}"
+                for col in output_cols:
+                    df.at[idx, col] = f"ERROR: {e}"
 
             df.to_csv(output_csv, index=False)
 
@@ -134,11 +144,11 @@ class PerturbationPipeline:
     ) -> None:
         self.run_single_perturbation("paraphrase",  input_csv, paraphrase_output_csv)
         self.run_single_perturbation("adversarial", input_csv, adversarial_output_csv)
-
+        
 
 if __name__ == "__main__":
     if not vs_config.DEBUG_INPUT_CSV.exists():
-        pd.read_csv(vs_config.INPUT_CSV).head(vs_config.DEBUG_ROWS).to_csv(
+        pd.read_csv(vs_config.INPUT_CSV).head(10).to_csv(
             vs_config.DEBUG_INPUT_CSV, index=False
         )
         print(f"Created debug sample → {vs_config.DEBUG_INPUT_CSV}")
