@@ -1,0 +1,20 @@
+{
+  "model_name": "Qwen/Qwen3.5-27B",
+  "dataset_path": "CAA/value_data/final_dataset_200.csv",
+  "relations_path": "CAA/value_data/schwartz_relations.json",
+  "output_dir": "CAA/Geometry/outputs/qwen3_5_27b_base",
+  "alpha_values": [
+    0.5,
+    1.0,
+    2.0,
+    4.0
+  ],
+  "steering_method": "caa",
+  "eval_split": 0.1,
+  "seed": 42,
+  "layer_start_frac": 0.4,
+  "layer_override": null,
+  "device": "auto",
+  "batch_size": 8,
+  "save_activations": true
+}
