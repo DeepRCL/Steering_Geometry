@@ -12,5 +12,5 @@ dataset_construction/value_bench/data/*
 dataset_construction/Touche23-ValueEval/data/
 CAA/Geometry/outputs/*
 SAE/outputs/*
-
 *.pt
+SAE/sae_models/*
