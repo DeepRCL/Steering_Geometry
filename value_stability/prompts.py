@@ -44,9 +44,11 @@ PERTURBATION_TYPES = {
     "paraphrase": {
         "user_prompt": PARAPHRASE_USER_PROMPT,
         "output_col": "paraphrased_question",
+        "output_cols": ["paraphrased_question", "paraphrased_positive_answer", "paraphrased_negative_answer"],
     },
     "adversarial": {
         "user_prompt": ADVERSARIAL_USER_PROMPT,
         "output_col": "adversarial_question",
+        "output_cols": ["adversarial_question"],
     },
 }
