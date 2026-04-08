@@ -265,7 +265,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     _DATA = Path("/Users/hamidrezaei/Workspace/Steering_Geometry/dataset_construction/data")
-    input_csv = _DATA / "dataset_negative_answer.csv"
+    input_csv = _DATA / "dataset_positive_answer.csv"
 
     runner = run_by_row if args.mode == "by_row" else run_by_value
 
@@ -273,14 +273,14 @@ if __name__ == "__main__":
         import time
         debug_dir = _DATA / "debug"
         debug_dir.mkdir(exist_ok=True)
-        debug_input = debug_dir / f"negative_answer_input_{round(time.time())}.csv"
+        debug_input = debug_dir / f"positive_answer_input_{round(time.time())}.csv"
         if not debug_input.exists():
             pd.read_csv(input_csv).iloc[1200:1250].to_csv(debug_input, index=False)
         suffix = "row" if args.mode == "by_row" else "value"
-        output_csv = debug_dir / f"negative_answer_mapped_{suffix}_{round(time.time())}.csv"
+        output_csv = debug_dir / f"positive_answer_mapped_{suffix}_{round(time.time())}.csv"
         print(f"=== DEBUG MODE ({args.mode}) ===")
         runner(debug_input, output_csv)
     else:
         print(f"Running on full dataset with {args.mode} mode.")
-        output_csv = _DATA / "dataset_negative_answer_mapped.csv"
+        output_csv = _DATA / "dataset_positive_answer_mapped.csv"
         runner(input_csv, output_csv)
