@@ -1,0 +1,102 @@
+{
+  "12": {
+    "consistency": 0.8163728594779969,
+    "discrimination": 0.006422077616055806,
+    "combined_normalized": 1.064527198681552
+  },
+  "13": {
+    "consistency": 0.8384408712387085,
+    "discrimination": 0.005648954461018245,
+    "combined_normalized": 1.1321504472460693
+  },
+  "14": {
+    "consistency": 0.857445701956749,
+    "discrimination": 0.004460570712884267,
+    "combined_normalized": 1.0839269839512724
+  },
+  "15": {
+    "consistency": 0.7737332820892334,
+    "discrimination": 0.008380030592282614,
+    "combined_normalized": 1.0284204359429683
+  },
+  "16": {
+    "consistency": 0.7885144621133804,
+    "discrimination": 0.007572109500567119,
+    "combined_normalized": 1.0146183408305582
+  },
+  "17": {
+    "consistency": 0.8180464535951615,
+    "discrimination": 0.0063066693643728895,
+    "combined_normalized": 1.0580890491555413
+  },
+  "18": {
+    "consistency": 0.8544644206762314,
+    "discrimination": 0.0047099341948827105,
+    "combined_normalized": 1.1043144961189866
+  },
+  "19": {
+    "consistency": 0.828179070353508,
+    "discrimination": 0.0055358583728472395,
+    "combined_normalized": 1.004425035540244
+  },
+  "20": {
+    "consistency": 0.8397479176521301,
+    "discrimination": 0.005087098727623622,
+    "combined_normalized": 1.0310216844961009
+  },
+  "21": {
+    "consistency": 0.8367344200611114,
+    "discrimination": 0.005152054131031036,
+    "combined_normalized": 1.0135125105607474
+  },
+  "22": {
+    "consistency": 0.868972647190094,
+    "discrimination": 0.004039970537026723,
+    "combined_normalized": 1.1158328823363324
+  },
+  "23": {
+    "consistency": 0.8541292637586594,
+    "discrimination": 0.0042370085914929705,
+    "combined_normalized": 1.004549931181884
+  },
+  "24": {
+    "consistency": 0.8509799122810364,
+    "discrimination": 0.00436257819334666,
+    "combined_normalized": 0.9980033133455382
+  },
+  "25": {
+    "consistency": 0.857450756430626,
+    "discrimination": 0.004118303457895915,
+    "combined_normalized": 1.0142510833985119
+  },
+  "26": {
+    "consistency": 0.8479236930608749,
+    "discrimination": 0.004388925929864247,
+    "combined_normalized": 0.9721930752756053
+  },
+  "27": {
+    "consistency": 0.7756643563508987,
+    "discrimination": 0.004969269037246704,
+    "combined_normalized": 0.35327208792214404
+  },
+  "28": {
+    "consistency": 0.770947340130806,
+    "discrimination": 0.005120832473039627,
+    "combined_normalized": 0.3360285440190463
+  },
+  "29": {
+    "consistency": 0.7920466899871826,
+    "discrimination": 0.004482650508483251,
+    "combined_normalized": 0.4212605655362993
+  },
+  "30": {
+    "consistency": 0.7952825427055359,
+    "discrimination": 0.004392261306444804,
+    "combined_normalized": 0.43585665225926223
+  },
+  "31": {
+    "consistency": 0.829722398519516,
+    "discrimination": 0.003471388171116511,
+    "combined_normalized": 0.599590652172819
+  }
+}

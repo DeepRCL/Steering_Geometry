@@ -1,0 +1,14 @@
+activations
+venv
+__pycache__
+.pytest_cache
+.ipynb_checkpoints
+.env
+notebooks/scratch.ipynb
+.vscode
+finetuned_models
+sync_model.sh
+logs
+.DS_Store
+.hypothesis
+*/.DS_Store
