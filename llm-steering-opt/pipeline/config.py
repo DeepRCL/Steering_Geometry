@@ -115,6 +115,10 @@ class SteeringConfig:
     # Number of training samples per value for full training (None = all available)
     n_training_samples: Optional[int] = None
 
+    # ── Evaluation ────────────────────────────────────────────────────────
+    # Max validation samples per value for steering evaluation (None = all available)
+    n_eval_samples: Optional[int] = 20
+
     # ── Steering Strength ────────────────────────────────────────────────
     alpha: float = 40.0  # Multiplier on the vector at evaluation/inference time
 

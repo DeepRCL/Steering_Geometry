@@ -14,14 +14,14 @@ import random
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
 import numpy as np
 from scipy.linalg import orthogonal_procrustes
 from scipy.spatial import procrustes
-from scipy.stats import spearmanr, pearsonr
+from scipy.stats import spearmanr, pearsonr, rankdata
 from sklearn.decomposition import PCA
 from sklearn.manifold import MDS, TSNE
 from sklearn.metrics import silhouette_score
@@ -179,7 +179,7 @@ class SteeringPipeline:
         last_token_activ = activs_list[0][0, -1, :].detach().cpu()
         return last_token_activ
 
-    def select_layer(self) -> int:
+    def select_layer(self) -> Tuple[int, Dict[str, Any]]:
         """
         Layer sweep using mean normalized L2 separation of activations.
 
@@ -189,7 +189,7 @@ class SteeringPipeline:
         Picks the layer with the highest mean separation across values.
 
         Returns:
-            Best layer index.
+            Best layer index and the JSON-ready layer sweep payload.
         """
         candidates = self._get_sweep_candidates()
         self._log(f"Layer sweep (normalized L2 separation) over candidates: {candidates}")
@@ -267,7 +267,6 @@ class SteeringPipeline:
         for layer in candidates:
             self._log(f"    Layer {layer}: mean normalized L2 sep = {mean_scores.get(layer, 0):.4f}")
 
-        sweep_path = os.path.join(self.config.output_dir, "layer_sweep.json")
         scores_dict = {
             str(layer): {
                 "mean_normalized_l2_separation": mean_scores.get(layer, 0),
@@ -277,13 +276,13 @@ class SteeringPipeline:
             }
             for layer in candidates
         }
-        with open(sweep_path, "w") as f:
-            json.dump(
-                {"candidates": candidates, "scores": scores_dict, "best_layer": best_layer},
-                f, indent=2,
-            )
+        sweep_payload = {
+            "candidates": candidates,
+            "scores": scores_dict,
+            "best_layer": best_layer,
+        }
 
-        return best_layer
+        return best_layer, sweep_payload
 
     # ─── Training ────────────────────────────────────────────────────────
 
@@ -369,6 +368,276 @@ class SteeringPipeline:
         self._log(f"\n  Trained {len(vectors)}/{len(self.values)} vectors\n")
         return vectors
 
+    # ─── Steering Evaluation (Log-Likelihood) ─────────────────────────
+
+    @torch.no_grad()
+    def _compute_logprob(
+        self,
+        prompt: str,
+        completion: str,
+        hook_infos: Optional[list] = None,
+    ) -> float:
+        """
+        Compute the mean per-token log-probability of `completion` given `prompt`.
+
+        Delegates to ``steering_opt.get_completion_logprob_hf``.  When
+        ``hook_infos`` is provided the forward pass runs inside
+        ``hf_hooks_contextmanager`` so the steering vector is active.
+
+        Returns:
+            Mean log-prob per completion token (higher = model assigns more
+            probability mass to this completion).
+        """
+        if hook_infos:
+            with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
+                joint_lp, per_token_lps = steering_opt.get_completion_logprob_hf(
+                    self.model, prompt, completion, self.tokenizer,
+                    return_all_probs=True,
+                )
+        else:
+            joint_lp, per_token_lps = steering_opt.get_completion_logprob_hf(
+                self.model, prompt, completion, self.tokenizer,
+                return_all_probs=True,
+            )
+
+        if not per_token_lps:
+            return 0.0
+
+        # joint_lp is the sum; divide by token count for mean per-token
+        n_tokens = len(per_token_lps)
+        mean_lp = joint_lp.item() if isinstance(joint_lp, torch.Tensor) else float(joint_lp)
+        return mean_lp / n_tokens
+
+    def evaluate_steering(
+        self,
+        vectors: Dict[str, torch.Tensor],
+        layer: Union[int, List[int]],
+    ) -> Dict[str, Any]:
+        """
+        Evaluate the effectiveness of trained steering vectors on the
+        held-out validation set.
+
+        For each value and each validation sample we compute:
+            • log P(positive | prompt)   and   log P(negative | prompt)
+              both *without* steering (baseline) and *with* steering.
+
+        Reported metrics (per-value and aggregate):
+            • **accuracy_baseline**: fraction of val samples where the
+              unsteered model already prefers positive over negative.
+            • **accuracy_steered**: same fraction after applying the
+              steering vector (α × v).
+            • **Δ accuracy**: steered − baseline.
+            • **mean_delta_logprob**: average change in
+              (logP(pos) − logP(neg)) caused by steering.
+            • **mean_logprob_pos_baseline / steered**: average per-token
+              log-prob of the positive completion.
+            • **mean_logprob_neg_baseline / steered**: same for negative.
+
+        Results are saved as ``steering_eval_metrics.json`` and a grouped
+        bar-chart comparing baseline vs. steered accuracy per value.
+
+        Returns:
+            dict of evaluation metrics.
+        """
+        self._log("\n" + "─" * 60)
+        self._log("  Steering Evaluation (Log-Likelihood on Validation Set)")
+        self._log("─" * 60)
+
+        layers = self._normalize_layers(layer)
+        alpha = self.config.alpha
+        n_eval = self.config.n_eval_samples
+
+        # Collect per-sample records ──────────────────────────────────────
+        records: List[dict] = []  # one dict per (value, sample)
+
+        eval_values = [v for v in self.values if v in vectors]
+        
+        for value in eval_values:
+            vec = vectors[value].detach().to(self.config.device)
+            scaled_vec = alpha * vec
+            hook_fn = steering_opt.make_steering_hook_hf(scaled_vec)
+            hook_infos = [(l, hook_fn) for l in layers]
+
+            val_rows = data_utils.get_rows_for_value(self.val_rows, value)
+            if not val_rows:
+                self._log(f"  {value}: no validation rows – skipping")
+                continue
+
+            # Optionally sub-sample for speed
+            if n_eval is not None and n_eval < len(val_rows):
+                rng = random.Random(self.config.random_seed)
+                val_rows = rng.sample(val_rows, n_eval)
+
+            self._log(f"  Evaluating {value} ({len(val_rows)} samples) ...")
+
+            pbar = tqdm(val_rows, desc="Eval steering", leave=True)
+            for row in pbar:
+                pbar.set_description(f"Eval: {value}")
+                prompt = data_utils.format_prompt(
+                    row["question"],
+                    self.tokenizer,
+                    self.config.use_chat_template,
+                    self.config.prompt_template,
+                )
+                pos = row["positive_answer"]
+                neg = row["negative_answer"]
+
+                # Baseline (no steering)
+                lp_pos_base = self._compute_logprob(prompt, pos)
+                lp_neg_base = self._compute_logprob(prompt, neg)
+
+                # Steered
+                lp_pos_steer = self._compute_logprob(prompt, pos, hook_infos)
+                lp_neg_steer = self._compute_logprob(prompt, neg, hook_infos)
+
+                records.append({
+                    "value": value,
+                    "lp_pos_base": lp_pos_base,
+                    "lp_neg_base": lp_neg_base,
+                    "lp_pos_steer": lp_pos_steer,
+                    "lp_neg_steer": lp_neg_steer,
+                })
+
+        if not records:
+            self._log("  WARNING: no evaluation records collected!")
+            return {}
+
+        # ── Aggregate metrics ────────────────────────────────────────────
+        def _metrics_from_records(recs: List[dict]) -> dict:
+            n = len(recs)
+            correct_base = sum(
+                1 for r in recs if r["lp_pos_base"] > r["lp_neg_base"]
+            )
+            correct_steer = sum(
+                1 for r in recs if r["lp_pos_steer"] > r["lp_neg_steer"]
+            )
+            delta_lp = [
+                (r["lp_pos_steer"] - r["lp_neg_steer"])
+                - (r["lp_pos_base"] - r["lp_neg_base"])
+                for r in recs
+            ]
+            return {
+                "n_samples": n,
+                "accuracy_baseline": round(correct_base / n, 4),
+                "accuracy_steered": round(correct_steer / n, 4),
+                "delta_accuracy": round((correct_steer - correct_base) / n, 4),
+                "mean_delta_logprob": round(float(np.mean(delta_lp)), 6),
+                "std_delta_logprob": round(float(np.std(delta_lp)), 6),
+                "mean_lp_pos_baseline": round(
+                    float(np.mean([r["lp_pos_base"] for r in recs])), 6
+                ),
+                "mean_lp_pos_steered": round(
+                    float(np.mean([r["lp_pos_steer"] for r in recs])), 6
+                ),
+                "mean_lp_neg_baseline": round(
+                    float(np.mean([r["lp_neg_base"] for r in recs])), 6
+                ),
+                "mean_lp_neg_steered": round(
+                    float(np.mean([r["lp_neg_steer"] for r in recs])), 6
+                ),
+            }
+
+        overall = _metrics_from_records(records)
+
+        per_value: Dict[str, dict] = {}
+        for value in self.values:
+            vrecs = [r for r in records if r["value"] == value]
+            if vrecs:
+                per_value[value] = _metrics_from_records(vrecs)
+
+        eval_payload = {
+            "alpha": alpha,
+            "layer": layer if isinstance(layer, int) else layers,
+            "overall": overall,
+            "per_value": per_value,
+        }
+
+        # ── Pretty-print summary ─────────────────────────────────────────
+        self._log("")
+        self._log(
+            f"  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} "
+            f"{'Δ Acc':>7} {'Δ logP':>9}"
+        )
+        self._log("  " + "-" * 75)
+        for value in self.values:
+            if value not in per_value:
+                continue
+            m = per_value[value]
+            self._log(
+                f"  {value:<35} {m['accuracy_baseline']:>9.1%} "
+                f"{m['accuracy_steered']:>10.1%} "
+                f"{m['delta_accuracy']:>+7.1%} "
+                f"{m['mean_delta_logprob']:>+9.4f}"
+            )
+        self._log("  " + "-" * 75)
+        o = overall
+        self._log(
+            f"  {'OVERALL':<35} {o['accuracy_baseline']:>9.1%} "
+            f"{o['accuracy_steered']:>10.1%} "
+            f"{o['delta_accuracy']:>+7.1%} "
+            f"{o['mean_delta_logprob']:>+9.4f}"
+        )
+        self._log("")
+
+        # ── Save JSON ────────────────────────────────────────────────────
+        eval_path = os.path.join(
+            self.config.output_dir, "steering_eval_metrics.json"
+        )
+        with open(eval_path, "w") as f:
+            json.dump(eval_payload, f, indent=2)
+        self._log(f"  Saved evaluation metrics → {eval_path}")
+
+        # ── Bar chart: baseline vs steered accuracy per value ────────────
+        self._plot_eval_accuracy(per_value, overall)
+
+        return eval_payload
+
+    def _plot_eval_accuracy(
+        self,
+        per_value: Dict[str, dict],
+        overall: dict,
+    ):
+        """Grouped bar chart comparing baseline vs steered accuracy."""
+        labels = [v for v in self.values if v in per_value]
+        if not labels:
+            return
+
+        base_accs = [per_value[v]["accuracy_baseline"] for v in labels]
+        steer_accs = [per_value[v]["accuracy_steered"] for v in labels]
+
+        x = np.arange(len(labels))
+        width = 0.35
+
+        fig, ax = plt.subplots(figsize=(max(12, len(labels) * 0.9), 6))
+        bars1 = ax.bar(x - width / 2, base_accs, width, label="Baseline",
+                       color="#90CAF9", edgecolor="#1565C0")
+        bars2 = ax.bar(x + width / 2, steer_accs, width, label="Steered",
+                       color="#A5D6A7", edgecolor="#2E7D32")
+
+        ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.5,
+                   label="Chance (50%)")
+        ax.set_ylabel("Accuracy (positive preferred)")
+        ax.set_title(
+            f"Steering Evaluation — Baseline vs Steered Accuracy\n"
+            f"(α={self.config.alpha}, overall: "
+            f"{overall['accuracy_baseline']:.1%} → {overall['accuracy_steered']:.1%})"
+        )
+        ax.set_xticks(x)
+        short_labels = [v.split(":")[-1].strip() if ":" in v else v
+                        for v in labels]
+        ax.set_xticklabels(short_labels, rotation=45, ha="right", fontsize=9)
+        ax.set_ylim(0, 1.05)
+        ax.legend(loc="upper left")
+        ax.grid(axis="y", alpha=0.3)
+
+        plt.tight_layout()
+        out_path = os.path.join(
+            self.config.output_dir, "steering_eval_accuracy.png"
+        )
+        plt.savefig(out_path, dpi=300)
+        plt.close()
+        self._log(f"  Saved accuracy plot   → {out_path}")
+
     # ─── Geometry Analysis ─────────────────────────────────────────────
 
     @staticmethod
@@ -423,11 +692,26 @@ class SteeringPipeline:
         out_dir = os.path.join(self.config.output_dir, "geometry")
         os.makedirs(out_dir, exist_ok=True)
 
+        # ── 0. Mean-center then renormalize (consistent with CAA pipeline) ──
+        # Step 1: collect raw vectors as float
+        raw_vectors: Dict[str, torch.Tensor] = {}
+        for val in SCHWARTZ_CIRCUMPLEX_ORDER:
+            raw_vectors[val] = vectors[val].detach().cpu().float()
+
+        # Step 2: center — subtract the mean vector across all values
+        mean_vec = torch.stack(
+            [raw_vectors[val] for val in SCHWARTZ_CIRCUMPLEX_ORDER]
+        ).mean(dim=0)
+        centered_vectors: Dict[str, torch.Tensor] = {}
+        for val in SCHWARTZ_CIRCUMPLEX_ORDER:
+            centered_vectors[val] = raw_vectors[val] - mean_vec
+
+        # Step 3: renormalize each centered vector to unit norm
         unit_vectors: Dict[str, torch.Tensor] = {}
         for val in SCHWARTZ_CIRCUMPLEX_ORDER:
-            vec = vectors[val].detach().cpu().float()
-            norm = vec.norm()
-            unit_vectors[val] = vec / norm if norm > 0 else vec
+            vec = centered_vectors[val]
+            norm = vec.norm().clamp_min(1e-12)
+            unit_vectors[val] = vec / norm
 
         num_values = len(SCHWARTZ_CIRCUMPLEX_ORDER)
 
@@ -471,16 +755,70 @@ class SteeringPipeline:
         )
 
         # ── 4. Heatmaps ──────────────────────────────────────────────
+        short_labels = [
+            v.split(":")[-1].strip() if ":" in v else v
+            for v in SCHWARTZ_CIRCUMPLEX_ORDER
+        ]
+
+        # 4a. Original empirical heatmap (fixed range [-1, 1])
         plt.figure(figsize=(12, 10))
         sns.heatmap(
             empirical_sim,
-            xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
-            yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            xticklabels=short_labels,
+            yticklabels=short_labels,
             cmap="coolwarm", vmin=-1, vmax=1,
+            annot=True, fmt=".2f", annot_kws={"size": 7},
         )
-        plt.title("Empirical Cosine Similarities")
+        plt.title("Empirical Cosine Similarities (fixed scale)")
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap.png"), dpi=300)
+        plt.close()
+
+        # 4b. Contrast-enhanced: mask diagonal, auto-scale to off-diagonal range
+        off_diag_mask = ~np.eye(num_values, dtype=bool)
+        off_diag_vals = empirical_sim[off_diag_mask]
+        vmin_auto = off_diag_vals.min()
+        vmax_auto = off_diag_vals.max()
+
+        diag_masked = empirical_sim.copy()
+        np.fill_diagonal(diag_masked, np.nan)
+
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(
+            diag_masked,
+            xticklabels=short_labels,
+            yticklabels=short_labels,
+            cmap="coolwarm",
+            vmin=vmin_auto, vmax=vmax_auto,
+            annot=True, fmt=".3f", annot_kws={"size": 7},
+            mask=np.eye(num_values, dtype=bool),
+        )
+        plt.title(
+            f"Empirical Cosine Similarities (contrast-enhanced)\n"
+            f"color range: [{vmin_auto:.3f}, {vmax_auto:.3f}]"
+        )
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_enhanced.png"), dpi=300)
+        plt.close()
+
+        # 4c. Rank-transformed heatmap for maximum contrast
+        rank_matrix = np.zeros_like(empirical_sim)
+        rank_vals = rankdata(off_diag_vals)  # rank the off-diagonal values
+        rank_matrix[off_diag_mask] = rank_vals / rank_vals.max()  # normalize to [0,1]
+        np.fill_diagonal(rank_matrix, np.nan)
+
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(
+            rank_matrix,
+            xticklabels=short_labels,
+            yticklabels=short_labels,
+            cmap="coolwarm",
+            vmin=0, vmax=1,
+            mask=np.eye(num_values, dtype=bool),
+        )
+        plt.title("Empirical Similarity (rank-transformed, 0=least similar, 1=most)")
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_ranked.png"), dpi=300)
         plt.close()
 
         plt.figure(figsize=(12, 10))
@@ -691,6 +1029,13 @@ class SteeringPipeline:
         """
         Save each value's steering vector as a .pt file with metadata JSON.
 
+        Directory layout::
+
+            {output_dir}/{model_name}/lr_{lr}-alpha_{alpha}-layer_{layer}/vectors/
+                manifest.json
+                {value_name}.pt
+                {value_name}.json
+
         File naming: {sanitized_value_name}.pt  and  {sanitized_value_name}.json
         """
         vectors_dir = os.path.join(self.config.output_dir, "vectors")
@@ -711,7 +1056,9 @@ class SteeringPipeline:
                 "norm": vector.norm().item(),
                 "d_model": vector.shape[0],
                 "model_name": self.config.model_name,
+                "lr": self.config.lr,
                 "alpha": self.config.alpha,
+                "max_iters": self.config.max_iters,
             }
             meta_path = os.path.join(vectors_dir, f"{safe_name}.json")
             with open(meta_path, "w") as f:
@@ -757,6 +1104,37 @@ class SteeringPipeline:
 
         return result
 
+    def try_load_cached_vectors(
+        self,
+    ) -> Optional[Dict[str, torch.Tensor]]:
+        """
+        Attempt to load previously saved vectors for the current config.
+
+        Checks the expected output directory (derived from model name,
+        lr, alpha, and layer) for a ``vectors/manifest.json``.  If found,
+        loads all vectors and returns them.  Otherwise returns ``None``.
+        """
+        vectors_dir = os.path.join(self.config.output_dir, "vectors")
+        manifest_path = os.path.join(vectors_dir, "manifest.json")
+
+        if not os.path.isfile(manifest_path):
+            return None
+
+        self._log(f"  Found cached vectors at {vectors_dir}/")
+
+        try:
+            loaded = self.load_vectors(vectors_dir)
+        except Exception as e:
+            self._log(f"  WARNING: failed to load cached vectors: {e}")
+            return None
+
+        vectors: Dict[str, torch.Tensor] = {}
+        for value, (vec, _meta) in loaded.items():
+            vectors[value] = vec
+
+        self._log(f"  Loaded {len(vectors)} cached vectors — skipping training")
+        return vectors
+
     # ─── Full Pipeline ───────────────────────────────────────────────────
 
     def run(self) -> Tuple[Dict[str, torch.Tensor], Dict[str, dict], int]:
@@ -771,37 +1149,49 @@ class SteeringPipeline:
         self._log("=" * 60)
         self._log("")
 
+        output_base = self.config.output_dir
+
         # 1. Load model
         self.load_model()
-
-        # Nest output under a model-specific subdirectory
-        safe_model = (
-            self.config.model_name.replace("/", "__").replace(" ", "_")
-        )
-        self.config.output_dir = os.path.join(self.config.output_dir, safe_model)
-        Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
 
         # 2. Prepare data
         self.prepare_data()
 
         # 3. Layer selection
+        layer_sweep_payload: Optional[Dict[str, Any]] = None
         if self.config.layer_sweep_enabled:
-            best_layer = self.select_layer()
+            best_layer, layer_sweep_payload = self.select_layer()
         else:
             candidates = self._get_sweep_candidates()
             # If --layer was given, candidates is [that_layer]; otherwise pick middle
             best_layer = candidates[0] if len(candidates) == 1 else candidates[len(candidates) // 2]
             self._log(f"Layer sweep disabled. Using layer {best_layer}\n")
 
-        # 4. Train vectors
-        vectors = self.train_vectors(best_layer)
+        self.config.output_dir = os.path.join(
+            output_base, self._run_dir_name(best_layer)
+        )
+        Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
 
-        # 5. Geometry analysis
+        if layer_sweep_payload is not None:
+            sweep_path = os.path.join(self.config.output_dir, "layer_sweep.json")
+            with open(sweep_path, "w") as f:
+                json.dump(layer_sweep_payload, f, indent=2)
+
+        # 4. Try loading cached vectors; train if unavailable
+        cached = self.try_load_cached_vectors()
+        if cached is not None:
+            vectors = cached
+        else:
+            vectors = self.train_vectors(best_layer)
+            # Save immediately so next run can reuse them
+            if self.config.save_vectors:
+                self.save_vectors(vectors, best_layer)
+
+        # 5. Steering evaluation (log-likelihood on validation set)
+        eval_metrics = self.evaluate_steering(vectors, best_layer)
+
+        # 6. Geometry analysis
         metrics = self.analyze_geometry(vectors)
-
-        # 6. Save vectors
-        if self.config.save_vectors:
-            self.save_vectors(vectors, best_layer)
 
         # Save full config
         config_path = os.path.join(self.config.output_dir, "config.json")
@@ -820,6 +1210,22 @@ class SteeringPipeline:
     def _log(self, msg: str):
         if self.config.verbose:
             print(msg)
+
+    def _run_dir_name(self, layer: int) -> str:
+        """
+        Hierarchical run directory::
+
+            {model_short_name}/lr_{lr}-alpha_{alpha}-layer_{layer}
+
+        Example::
+
+            Qwen3.5-9B-Base/lr_0p01-alpha_40p0-layer_22
+        """
+        model_short = self.config.model_name.split("/")[-1].replace(" ", "_")
+        lr_slug = str(self.config.lr).replace(".", "p").replace("-", "neg")
+        alpha_slug = str(self.config.alpha).replace(".", "p").replace("-", "neg")
+        run_name = f"lr_{lr_slug}-alpha_{alpha_slug}-layer_{layer}"
+        return os.path.join(model_short, run_name)
 
     @staticmethod
     def _sanitize_filename(name: str) -> str:
