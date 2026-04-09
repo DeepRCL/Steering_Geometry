@@ -4,6 +4,7 @@ import dataclasses
 from contextlib import contextmanager
 import mdmm
 import numpy as np
+from tqdm.auto import tqdm
 
 # utility function
 def _nested_list_max(l):
@@ -313,6 +314,7 @@ def optimize_vector(model, datapoints, layer,
 	do_output_constr=False, custom_output_constr_loss_func=None, custom_output_constr_pre_loss_func=None,
 	output_constr_norm_initial_scale=1, output_constr_lr=None, max_output_constr_iters=None,
 	debug=False,
+	show_iter_progress=False,
 ):
 	"""
 	Optimize a steering vector on a set of datapoints.
@@ -349,6 +351,7 @@ def optimize_vector(model, datapoints, layer,
 		Misc args:
 			only_hook_prompt (False by default): if True, then only apply the steering vector to tokens in the prompt (rather than all tokens, including those in the completion).
 			debug (False by default): if True, then print out loss information at each optimization step.
+			show_iter_progress (False by default): if True, show a tqdm bar over optimization steps (each trip through the training loop that ends with optimizer.step()).
 
 		Norm-constrained steering args:
 			max_norm (float, optional): the maximum norm of the steering vector. If set, then after each optimization step, if the vector's norm exceeds max_norm, it will be rescaled to max_norm.
@@ -572,95 +575,107 @@ def optimize_vector(model, datapoints, layer,
 	target_loss_cur_iters = 0
 	prev_loss_cur_iters = 0
 
-	while True:
-		if max_iters is not None and iters > max_iters:
-			if debug: print("Max iters reached.")	
-			break
-		if target_loss is not None and loss is not None:
-			if do_target_loss_sum:
-				if loss <= (target_loss if not satisfice else target_loss + eps):
-					target_loss_cur_iters += 1
-					if debug: print(f"Loss stopping threshold {target_loss} hit. Cur num iters: {target_loss_cur_iters}")
-				else:
-					target_loss_cur_iters = 0
+	pbar = tqdm(
+		total=max_iters,
+		desc="optimize",
+		unit="step",
+		disable=not show_iter_progress,
+	)
+	try:
+		while True:
+			if max_iters is not None and iters > max_iters:
+				if debug: print("Max iters reached.")	
+				break
+			if target_loss is not None and loss is not None:
+				if do_target_loss_sum:
+					if loss <= (target_loss if not satisfice else target_loss + eps):
+						target_loss_cur_iters += 1
+						if debug: print(f"Loss stopping threshold {target_loss} hit. Cur num iters: {target_loss_cur_iters}")
+					else:
+						target_loss_cur_iters = 0
 
-			if not do_target_loss_sum:
-				target_loss_hit = check_if_target_loss_hit(all_completion_losses, target_loss if not satisfice else target_loss + eps) 
-				if target_loss_hit:
-					target_loss_cur_iters += 1
-					if debug: print(f"Loss stopping threshold {target_loss} hit. All completion losses: {all_completion_losses}. Cur num iters: {target_loss_cur_iters}")
-				else:
-					target_loss_cur_iters = 0
+				if not do_target_loss_sum:
+					target_loss_hit = check_if_target_loss_hit(all_completion_losses, target_loss if not satisfice else target_loss + eps) 
+					if target_loss_hit:
+						target_loss_cur_iters += 1
+						if debug: print(f"Loss stopping threshold {target_loss} hit. All completion losses: {all_completion_losses}. Cur num iters: {target_loss_cur_iters}")
+					else:
+						target_loss_cur_iters = 0
 
-			if target_loss_cur_iters >= target_loss_target_iters:
-				if debug: print(f"Loss stopping threshold {target_loss} hit. Breaking.")
+				if target_loss_cur_iters >= target_loss_target_iters:
+					if debug: print(f"Loss stopping threshold {target_loss} hit. Breaking.")
+					break
+
+			optimizer.zero_grad()
+			prev_loss = loss
+			loss = 0
+
+			for datapoint_idx, datapoint in enumerate(datapoints):
+				for src_completion_idx in range(len(datapoint.src_completions)):
+					for noise_iter in range(noise_iters):
+						# I think that we have to do this every time to prevent "backwarding through graph a second time" errors
+						if affine_rank is not None:
+							matrix = matrix_left.T @ matrix_right
+						else:
+							matrix = None
+						cur_loss = get_completion_loss_with_noise(datapoint_idx, src_completion_idx, vector, matrix, is_src_completion=True, do_one_minus=do_one_minus)
+						loss += cur_loss.item()
+						all_completion_losses[datapoint_idx][0][src_completion_idx] = cur_loss.item()
+						if satisfice:
+							cur_target_loss = target_loss if datapoint.src_completions_target_losses is None else datapoint.src_completions_target_losses[src_completion_idx]
+							cur_loss = (cur_loss - cur_target_loss)**2
+						cur_loss.backward()
+
+				for dst_completion_idx in range(len(datapoint.dst_completions)):
+					for noise_iter in range(noise_iters):
+						# I think that we have to do this every time to prevent "backwarding through graph a second time" errors
+						if affine_rank is not None:
+							matrix = matrix_left.T @ matrix_right
+						else:
+							matrix = None
+						cur_loss = get_completion_loss_with_noise(datapoint_idx, dst_completion_idx, vector, matrix, is_src_completion=False)
+						loss += cur_loss.item()
+						all_completion_losses[datapoint_idx][1][dst_completion_idx] = cur_loss.item()
+						if satisfice:
+							cur_target_loss = target_loss if datapoint.dst_completions_target_losses is None else datapoint.dst_completions_target_losses[dst_completion_idx]
+							cur_loss = (cur_loss - cur_target_loss)**2
+						cur_loss.backward()
+
+			#loss /= len(datapoints)
+			if prev_loss is not None and abs(prev_loss - loss) < eps:
+				prev_loss_cur_iters += 1
+			if prev_loss_cur_iters >= target_loss_target_iters:
+				if debug:
+					print("prev_loss reached")
+					print("prev_loss, loss:", prev_loss, loss)
 				break
 
-		optimizer.zero_grad()
-		prev_loss = loss
-		loss = 0
+			optimizer.step()
 
-		for datapoint_idx, datapoint in enumerate(datapoints):
-			for src_completion_idx in range(len(datapoint.src_completions)):
-				for noise_iter in range(noise_iters):
-					# I think that we have to do this every time to prevent "backwarding through graph a second time" errors
-					if affine_rank is not None:
-						matrix = matrix_left.T @ matrix_right
-					else:
-						matrix = None
-					cur_loss = get_completion_loss_with_noise(datapoint_idx, src_completion_idx, vector, matrix, is_src_completion=True, do_one_minus=do_one_minus)
-					loss += cur_loss.item()
-					all_completion_losses[datapoint_idx][0][src_completion_idx] = cur_loss.item()
-					if satisfice:
-						cur_target_loss = target_loss if datapoint.src_completions_target_losses is None else datapoint.src_completions_target_losses[src_completion_idx]
-						cur_loss = (cur_loss - cur_target_loss)**2
-					cur_loss.backward()
+			# if we've reached our max norm, then normalize our parameters
+			with torch.no_grad():
+				if max_norm is not None and (cur_norm := torch.linalg.norm(vector)) > max_norm:
+					vector[:] = max_norm * vector / torch.linalg.norm(vector)
 
-			for dst_completion_idx in range(len(datapoint.dst_completions)):
-				for noise_iter in range(noise_iters):
-					# I think that we have to do this every time to prevent "backwarding through graph a second time" errors
-					if affine_rank is not None:
-						matrix = matrix_left.T @ matrix_right
-					else:
-						matrix = None
-					cur_loss = get_completion_loss_with_noise(datapoint_idx, dst_completion_idx, vector, matrix, is_src_completion=False)
-					loss += cur_loss.item()
-					all_completion_losses[datapoint_idx][1][dst_completion_idx] = cur_loss.item()
-					if satisfice:
-						cur_target_loss = target_loss if datapoint.dst_completions_target_losses is None else datapoint.dst_completions_target_losses[dst_completion_idx]
-						cur_loss = (cur_loss - cur_target_loss)**2
-					cur_loss.backward()
+				# normalize rows of left and right low rank matrices
+				# according to the original MELBO post this works better than spectral norm
+				if affine_rank is not None and max_affine_norm is not None:
+					cur_affine_norms_left = matrix_left.norm(dim=1)
+					affine_coeffs_left = torch.where(cur_affine_norms_left > max_affine_norm, max_affine_norm/cur_affine_norms_left, 1) 
 
-		#loss /= len(datapoints)
-		if prev_loss is not None and abs(prev_loss - loss) < eps:
-			prev_loss_cur_iters += 1
-		if prev_loss_cur_iters >= target_loss_target_iters:
-			if debug:
-				print("prev_loss reached")
-				print("prev_loss, loss:", prev_loss, loss)
-			break
+					cur_affine_norms_right = matrix_right.norm(dim=1)
+					affine_coeffs_right = torch.where(cur_affine_norms_right > max_affine_norm, max_affine_norm/cur_affine_norms_right, 1) 
 
-		optimizer.step()
+					matrix_left[:] = torch.einsum('rm, r -> rm', matrix_left, affine_coeffs_left)
+					matrix_right[:] = torch.einsum('rm, r -> rm', matrix_right, affine_coeffs_right)
+			if return_loss_history: loss_history.append(loss)
+			if return_vec_history: vec_history.append([x.detach().clone().cpu().float().numpy() for x in params])
+			iters += 1
+			pbar.update(1)
+			pbar.set_postfix(loss=loss)
 
-		# if we've reached our max norm, then normalize our parameters
-		with torch.no_grad():
-			if max_norm is not None and (cur_norm := torch.linalg.norm(vector)) > max_norm:
-				vector[:] = max_norm * vector / torch.linalg.norm(vector)
-
-			# normalize rows of left and right low rank matrices
-			# according to the original MELBO post this works better than spectral norm
-			if affine_rank is not None and max_affine_norm is not None:
-				cur_affine_norms_left = matrix_left.norm(dim=1)
-				affine_coeffs_left = torch.where(cur_affine_norms_left > max_affine_norm, max_affine_norm/cur_affine_norms_left, 1) 
-
-				cur_affine_norms_right = matrix_right.norm(dim=1)
-				affine_coeffs_right = torch.where(cur_affine_norms_right > max_affine_norm, max_affine_norm/cur_affine_norms_right, 1) 
-
-				matrix_left[:] = torch.einsum('rm, r -> rm', matrix_left, affine_coeffs_left)
-				matrix_right[:] = torch.einsum('rm, r -> rm', matrix_right, affine_coeffs_right)
-		if return_loss_history: loss_history.append(loss)
-		if return_vec_history: vec_history.append([x.detach().clone().cpu().float().numpy() for x in params])
-		iters += 1
+	finally:
+		pbar.close()
 
 	if debug:
 		print("Final loss:", loss)

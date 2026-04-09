@@ -46,6 +46,7 @@ def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
 def _circular_step_distance(i: int, j: int, n: int) -> int:
     return min(abs(i - j), n - abs(i - j))
 
+
 def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     print("Running geometry analysis...")
     out_dir = config.subdir("geometry")
