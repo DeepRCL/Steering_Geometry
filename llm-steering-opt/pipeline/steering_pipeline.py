@@ -2,8 +2,9 @@
 Main steering pipeline: layer selection, per-value vector training, and evaluation.
 
 Layer selection uses mean normalized L2 separation of activations.
-Evaluation uses Spearman correlation between empirical steering-vector cosine
-similarities and the theoretical Schwartz value relationship matrix.
+Evaluation uses geometry analysis of steering vectors against the theoretical
+Schwartz value relationship matrix (Spearman/Pearson correlation, Procrustes
+alignment, silhouette scores, and dimensionality-reduction visualizations).
 """
 
 import dataclasses
@@ -13,19 +14,35 @@ import random
 import sys
 import time
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import torch
 import torch.nn.functional as F
 import numpy as np
+from scipy.linalg import orthogonal_procrustes
+from scipy.spatial import procrustes
 from scipy.stats import spearmanr, pearsonr
+from sklearn.decomposition import PCA
+from sklearn.manifold import MDS, TSNE
+from sklearn.metrics import silhouette_score
+import umap
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import seaborn as sns
 from tqdm import tqdm
 
 # Ensure steering_opt is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import steering_opt
 
-from .config import SteeringConfig, SCHWARTZ_CIRCUMPLEX_ORDER
+from .config import (
+    SteeringConfig,
+    SCHWARTZ_CIRCUMPLEX_ORDER,
+    HIGHER_ORDER_GROUPS,
+    GROUP_COLORS,
+    value_to_group,
+)
 from . import data_utils
 
 
@@ -270,7 +287,13 @@ class SteeringPipeline:
 
     # ─── Training ────────────────────────────────────────────────────────
 
-    def train_vectors(self, layer: int) -> Dict[str, torch.Tensor]:
+    @staticmethod
+    def _normalize_layers(layer: Union[int, List[int]]) -> List[int]:
+        if isinstance(layer, int):
+            return [layer]
+        return list(layer)
+
+    def train_vectors(self, layer: Union[int, List[int]]) -> Dict[str, torch.Tensor]:
         """
         Train one steering vector per Schwartz value.
 
@@ -288,9 +311,9 @@ class SteeringPipeline:
         vectors: Dict[str, torch.Tensor] = {}
         train_info: Dict[str, dict] = {}
 
-        pbar_train = tqdm(self.values, desc="Training Vectors", leave=True)
-        for value in pbar_train:
-            pbar_train.set_description(f"Training: {value}")
+        # pbar_train = tqdm(self.values, desc="Training Vectors", leave=True)
+        for value in self.values:
+            # pbar_train.set_description(f"Training: {value}")
             train_value_rows = data_utils.get_rows_for_value(
                 self.train_rows, value
             )
@@ -311,24 +334,17 @@ class SteeringPipeline:
             self._log(f"    Using {len(datapoints)} training datapoints")
 
             t0 = time.time()
-            try:
-                vector, info = steering_opt.optimize_vector(
-                    self.model,
-                    datapoints,
-                    layer,
-                    tokenizer=self.tokenizer,
-                    use_transformer_lens=False,
-                    lr=self.config.lr,
-                    max_iters=self.config.max_iters,
-                    max_norm=self.config.max_norm,
-                    starting_norm=self.config.starting_norm,
-                    coldness=self.config.coldness,
-                    target_loss=self.config.target_loss,
-                    return_info=True,
-                )
-            except Exception as e:
-                self._log(f"    ✗ Failed: {e}")
-                continue
+            
+            vector, info = steering_opt.optimize_vector(
+                self.model,
+                datapoints,
+                layer,
+                tokenizer=self.tokenizer,
+                lr=self.config.lr,
+                max_iters=self.config.max_iters,
+                return_info=True,
+                show_iter_progress=False,
+            )            
 
             elapsed = time.time() - t0
             vectors[value] = vector.detach().clone()
@@ -353,80 +369,88 @@ class SteeringPipeline:
         self._log(f"\n  Trained {len(vectors)}/{len(self.values)} vectors\n")
         return vectors
 
-    # ─── Evaluation (Spearman Correlation) ──────────────────────────────
+    # ─── Geometry Analysis ─────────────────────────────────────────────
 
-    @torch.no_grad()
-    def _compute_accuracy(
-        self,
-        vector: torch.Tensor,
-        layer: int,
-        datapoints: List[steering_opt.TrainingDatapoint],
-    ) -> float:
-        """
-        Compute accuracy: fraction of datapoints where the steered model
-        assigns higher probability to dst_completion than src_completion.
-        """
-        if not datapoints:
-            return 0.0
+    @staticmethod
+    def _circular_step_distance(i: int, j: int, n: int) -> int:
+        """Shortest step distance between positions *i* and *j* on a circle of size *n*."""
+        return min(abs(i - j), n - abs(i - j))
 
-        alpha = self.config.alpha
-        vector = vector.detach()
-        correct = 0
+    @staticmethod
+    def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
+        """Scatter plot of a 2-D embedding, coloured by Schwartz higher-order group."""
+        plt.figure(figsize=(10, 8))
+        for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
+            group = value_to_group(val)
+            color = GROUP_COLORS.get(group, "black")
+            plt.scatter(coords[i, 0], coords[i, 1], c=color, s=100)
+            plt.annotate(
+                val.split(":")[-1].strip(),
+                (coords[i, 0], coords[i, 1]),
+                xytext=(5, 5),
+                textcoords="offset points",
+                fontsize=9,
+            )
 
-        for dp in datapoints:
-            if not dp.dst_completions or not dp.src_completions:
-                continue
+        from matplotlib.lines import Line2D
+        legend_els = [
+            Line2D([0], [0], marker="o", color="w", markerfacecolor=c,
+                   markersize=10, label=g)
+            for g, c in GROUP_COLORS.items()
+        ]
+        plt.legend(handles=legend_els, loc="best")
+        plt.title(title)
+        plt.tight_layout()
+        plt.savefig(out_path, dpi=300)
+        plt.close()
 
-            hook = (layer, steering_opt.make_steering_hook_hf(alpha * vector))
-            with steering_opt.hf_hooks_contextmanager(self.model, [hook]):
-                dst_lp = steering_opt.get_completion_logprob_hf(
-                    self.model, dp.prompt, dp.dst_completions[0], self.tokenizer
-                )
-                src_lp = steering_opt.get_completion_logprob_hf(
-                    self.model, dp.prompt, dp.src_completions[0], self.tokenizer
-                )
-
-            if dst_lp > src_lp:
-                correct += 1
-
-        return correct / len(datapoints)
-
-    def _compute_spearman(
+    def analyze_geometry(
         self, vectors: Dict[str, torch.Tensor]
     ) -> Dict[str, float]:
         """
-        Compute Spearman (and Pearson) correlation between the empirical
-        pairwise cosine similarities of unit-normed steering vectors and
-        the theoretical Schwartz relationship matrix.
+        Full geometry analysis of steering vectors against the theoretical
+        Schwartz circumplex.
 
-        Returns dict with spearman_rho, spearman_p_value, pearson_r, etc.
+        Computes Spearman/Pearson correlations, silhouette scores, within-
+        vs across-group cosine similarities, Procrustes alignment to the
+        theoretical circle, and generates heatmaps plus dimensionality-
+        reduction plots (UMAP, PCA, t-SNE, MDS with circumplex overlay).
+
+        Returns:
+            Dict of geometry metrics (also saved as geometry_metrics.json).
         """
-        ordered_values = [v for v in SCHWARTZ_CIRCUMPLEX_ORDER if v in vectors]
-        num_values = len(ordered_values)
+        self._log("Running geometry analysis...")
+        out_dir = os.path.join(self.config.output_dir, "geometry")
+        os.makedirs(out_dir, exist_ok=True)
 
         unit_vectors: Dict[str, torch.Tensor] = {}
-        for val in ordered_values:
+        for val in SCHWARTZ_CIRCUMPLEX_ORDER:
             vec = vectors[val].detach().cpu().float()
             norm = vec.norm()
             unit_vectors[val] = vec / norm if norm > 0 else vec
 
+        num_values = len(SCHWARTZ_CIRCUMPLEX_ORDER)
+
+        # ── 1. Empirical similarity matrix ────────────────────────────
         empirical_sim = np.zeros((num_values, num_values))
-        for i, v1 in enumerate(ordered_values):
-            for j, v2 in enumerate(ordered_values):
+        for i, v1 in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
+            for j, v2 in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
                 empirical_sim[i, j] = F.cosine_similarity(
                     unit_vectors[v1], unit_vectors[v2], dim=0
                 ).item()
 
+        # ── 2. Theoretical similarity matrix ──────────────────────────
         with open(self.config.relations_path, "r") as f:
             rel_data = json.load(f)
         rel_matrix = rel_data["basic_value_relationship_matrix"]
 
         theoretical_sim = np.zeros((num_values, num_values))
-        for i, v1 in enumerate(ordered_values):
-            for j, v2 in enumerate(ordered_values):
+        for i, v1 in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
+            for j, v2 in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
                 if v1 in rel_matrix and v2 in rel_matrix[v1]:
                     theoretical_sim[i, j] = rel_matrix[v1][v2]
 
+        # ── 3. Correlation (upper triangle, no diagonal) ─────────────
         triu_indices = np.triu_indices(num_values, k=1)
         emp_flat = empirical_sim[triu_indices]
         theo_flat = theoretical_sim[triu_indices]
@@ -434,115 +458,230 @@ class SteeringPipeline:
         rho, p_val = spearmanr(emp_flat, theo_flat)
         pearson_r, pearson_p = pearsonr(emp_flat, theo_flat)
 
-        return {
+        with open(os.path.join(out_dir, "spearman_report.json"), "w") as f:
+            json.dump({
+                "spearman_rho": float(rho),
+                "p_value": float(p_val),
+                "num_pairs": len(emp_flat),
+            }, f, indent=2)
+
+        self._log(
+            f"Spearman correlation between theoretical and empirical "
+            f"similarities: rho={rho:.4f}, p={p_val:.4g}"
+        )
+
+        # ── 4. Heatmaps ──────────────────────────────────────────────
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(
+            empirical_sim,
+            xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            cmap="coolwarm", vmin=-1, vmax=1,
+        )
+        plt.title("Empirical Cosine Similarities")
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap.png"), dpi=300)
+        plt.close()
+
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(
+            theoretical_sim,
+            xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            cmap="coolwarm", vmin=-1, vmax=1,
+        )
+        plt.title("Theoretical Relationships")
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, "theoretical_similarity_heatmap.png"), dpi=300)
+        plt.close()
+
+        # ── 5. Dimensionality-reduction projections ───────────────────
+        X = np.stack([unit_vectors[v].numpy() for v in SCHWARTZ_CIRCUMPLEX_ORDER])
+
+        reducer = umap.UMAP(n_components=2, metric="cosine",
+                            n_jobs=1, random_state=self.config.random_seed)
+        X_umap = reducer.fit_transform(X)
+        self._plot_embedding_2d(
+            os.path.join(out_dir, "umap_2d.png"),
+            "UMAP 2D Projection of Steering Vectors", X_umap,
+        )
+
+        X_pca = PCA(n_components=2, random_state=self.config.random_seed).fit_transform(X)
+        self._plot_embedding_2d(
+            os.path.join(out_dir, "pca_2d.png"),
+            "PCA 2D Projection of Steering Vectors", X_pca,
+        )
+
+        perplexity = min(5, max(2, num_values - 1))
+        X_tsne = TSNE(
+            n_components=2,
+            perplexity=perplexity,
+            init="pca",
+            learning_rate="auto",
+            random_state=self.config.random_seed,
+        ).fit_transform(X)
+        self._plot_embedding_2d(
+            os.path.join(out_dir, "tsne_2d.png"),
+            "t-SNE 2D Projection of Steering Vectors", X_tsne,
+        )
+
+        # ── 6. MDS with circumplex overlay ────────────────────────────
+        dist_matrix = 1 - empirical_sim
+        dist_matrix[dist_matrix < 0] = 0
+
+        mds = MDS(
+            n_components=2,
+            metric="precomputed",
+            init="random",
+            random_state=self.config.random_seed,
+            normalized_stress="auto",
+            n_init=4,
+        )
+        X_mds = mds.fit_transform(dist_matrix)
+
+        angles = np.linspace(0, 2 * np.pi, num_values, endpoint=False)
+        X_circle = np.column_stack([np.cos(angles), np.sin(angles)])
+
+        R, _sca = orthogonal_procrustes(X_mds, X_circle)
+        X_mds_aligned = X_mds.dot(R)
+
+        # ── 7. Quantitative geometry metrics ──────────────────────────
+        group_labels = np.array(
+            [value_to_group(val) for val in SCHWARTZ_CIRCUMPLEX_ORDER]
+        )
+        clipped_dist_matrix = np.maximum(0.0, 1.0 - empirical_sim)
+        np.fill_diagonal(clipped_dist_matrix, 0.0)
+        sil = silhouette_score(clipped_dist_matrix, group_labels, metric="precomputed")
+
+        same_group_mask = []
+        different_group_mask = []
+        circular_step_flat = []
+        neighbor_empirical = []
+        opposite_empirical = []
+        for i in range(num_values):
+            for j in range(i + 1, num_values):
+                same = (
+                    value_to_group(SCHWARTZ_CIRCUMPLEX_ORDER[i])
+                    == value_to_group(SCHWARTZ_CIRCUMPLEX_ORDER[j])
+                )
+                same_group_mask.append(same)
+                different_group_mask.append(not same)
+
+                step = self._circular_step_distance(i, j, num_values)
+                circular_step_flat.append(step)
+                if step == 1:
+                    neighbor_empirical.append(empirical_sim[i, j])
+                if step == num_values // 2:
+                    opposite_empirical.append(empirical_sim[i, j])
+
+        same_group_mask = np.array(same_group_mask, dtype=bool)
+        different_group_mask = np.array(different_group_mask, dtype=bool)
+        circular_step_flat = np.array(circular_step_flat, dtype=float)
+
+        within_group_mean = float(emp_flat[same_group_mask].mean())
+        across_group_mean = float(emp_flat[different_group_mask].mean())
+        within_minus_across = within_group_mean - across_group_mean
+
+        neighbor_mean = float(np.mean(neighbor_empirical))
+        opposite_mean = float(np.mean(opposite_empirical))
+        neighbor_minus_opposite = neighbor_mean - opposite_mean
+        circular_distance_spearman, circular_distance_p = spearmanr(
+            emp_flat, -circular_step_flat
+        )
+
+        _, _, procrustes_disparity = procrustes(X_circle, X_mds)
+        procrustes_rmse = float(
+            np.sqrt(np.mean(np.sum((X_mds_aligned - X_circle) ** 2, axis=1)))
+        )
+
+        geometry_metrics = {
             "spearman_rho": float(rho),
             "spearman_p_value": float(p_val),
             "pearson_r": float(pearson_r),
             "pearson_p_value": float(pearson_p),
-            "num_value_pairs": int(len(emp_flat)),
-            "num_values_used": num_values,
-            "empirical_similarity_matrix": empirical_sim.tolist(),
-            "theoretical_similarity_matrix": theoretical_sim.tolist(),
-            "ordered_values": ordered_values,
+            "num_pairs": len(emp_flat),
+            "silhouette_by_higher_order_group": float(sil),
+            "within_group_mean_cosine": within_group_mean,
+            "across_group_mean_cosine": across_group_mean,
+            "within_minus_across_cosine": within_minus_across,
+            "neighbor_mean_cosine": neighbor_mean,
+            "opposite_mean_cosine": opposite_mean,
+            "neighbor_minus_opposite_cosine": neighbor_minus_opposite,
+            "circular_distance_spearman": float(circular_distance_spearman),
+            "circular_distance_p_value": float(circular_distance_p),
+            "procrustes_disparity": float(procrustes_disparity),
+            "procrustes_rmse_after_alignment": procrustes_rmse,
+            "mds_stress": float(mds.stress_),
         }
+        with open(os.path.join(out_dir, "geometry_metrics.json"), "w") as f:
+            json.dump(geometry_metrics, f, indent=2)
 
-    def evaluate(
-        self, vectors: Dict[str, torch.Tensor], layer: int
-    ) -> Dict[str, dict]:
-        """
-        Evaluate steering vectors using:
-          1. Spearman correlation between empirical cosine similarities of
-             steering vectors and Schwartz theoretical relationship matrix.
-          2. Per-value accuracy on the held-out validation set.
+        # ── 8. MDS circumplex overlay plot ────────────────────────────
+        plt.figure(figsize=(12, 12))
+        circle_patch = plt.Circle((0, 0), 1, color="lightgray",
+                                  fill=False, linestyle="--")
+        plt.gca().add_patch(circle_patch)
 
-        Returns:
-            Dict with per-value accuracy, overall accuracy, and Spearman metrics.
-        """
-        self._log("Evaluating steering vectors")
-        metrics: Dict[str, dict] = {}
+        for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
+            tx, ty = X_circle[i]
+            plt.plot(tx, ty, "x", color="gray", markersize=8)
 
-        # --- Spearman correlation (main metric) ---
-        self._log("  Computing Spearman correlation with Schwartz theory...")
-        spearman_metrics = self._compute_spearman(vectors)
-        metrics["__spearman__"] = {
-            "spearman_rho": spearman_metrics["spearman_rho"],
-            "spearman_p_value": spearman_metrics["spearman_p_value"],
-            "pearson_r": spearman_metrics["pearson_r"],
-            "pearson_p_value": spearman_metrics["pearson_p_value"],
-            "num_value_pairs": spearman_metrics["num_value_pairs"],
-            "num_values_used": spearman_metrics["num_values_used"],
-        }
-        self._log(
-            f"    Spearman rho = {spearman_metrics['spearman_rho']:.4f} "
-            f"(p = {spearman_metrics['spearman_p_value']:.4g})"
+            ex, ey = X_mds_aligned[i]
+            group = value_to_group(val)
+            color = GROUP_COLORS.get(group, "black")
+
+            plt.plot(ex, ey, "o", color=color, markersize=8)
+            plt.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
+
+            label = val.split(":")[-1].strip()
+            plt.annotate(label, (ex, ey), xytext=(5, 5),
+                         textcoords="offset points", fontsize=9, color=color)
+
+        plt.title("2D MDS Aligned to Theoretical Circumplex")
+        ax = plt.gca()
+        ax.set_aspect("equal", adjustable="datalim")
+        scale = np.max(np.abs(X_mds_aligned))
+        lim = max(1.2, scale * 1.2)
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+        plt.grid(alpha=0.2)
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, "mds_circumplex.png"), dpi=300)
+        plt.close()
+
+        # ── 9. Theory vs empirical scatter ────────────────────────────
+        plt.figure(figsize=(8, 5))
+        jitter = np.random.default_rng(self.config.random_seed).normal(
+            0.0, 0.03, size=len(theo_flat)
         )
-        self._log(
-            f"    Pearson r    = {spearman_metrics['pearson_r']:.4f} "
-            f"(p = {spearman_metrics['pearson_p_value']:.4g})"
+        plt.scatter(theo_flat + jitter, emp_flat, alpha=0.7, s=40)
+        plt.xticks([-1, 0, 1])
+        plt.xlabel("Theoretical Relationship")
+        plt.ylabel("Empirical Cosine Similarity")
+        plt.title("Empirical Similarity vs Theory")
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(os.path.join(out_dir, "theory_vs_empirical_scatter.png"), dpi=300)
+        plt.close()
+
+        # ── 10. Difference heatmap ────────────────────────────────────
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(
+            empirical_sim - theoretical_sim,
+            xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            cmap="coolwarm",
+            center=0.0,
         )
+        plt.title("Empirical Minus Theoretical Similarity")
+        plt.tight_layout()
+        plt.savefig(
+            os.path.join(out_dir, "empirical_minus_theoretical_heatmap.png"), dpi=300
+        )
+        plt.close()
 
-        # Save detailed Spearman report separately
-        spearman_path = os.path.join(self.config.output_dir, "spearman_report.json")
-        with open(spearman_path, "w") as f:
-            json.dump(spearman_metrics, f, indent=2)
-
-        # --- Per-value accuracy ---
-        self._log("\n  Computing per-value steered accuracy...")
-        all_accs = []
-
-        pbar_eval = tqdm(self.values, desc="Evaluating accuracy", leave=True)
-        for value in pbar_eval:
-            if value not in vectors:
-                continue
-
-            pbar_eval.set_description(f"Eval: {value}")
-            vector = vectors[value]
-            val_value_rows = data_utils.get_rows_for_value(self.val_rows, value)
-
-            if not val_value_rows:
-                self._log(f"  {value}: no validation data, skipping")
-                continue
-
-            val_datapoints = data_utils.create_datapoints(
-                val_value_rows,
-                tokenizer=self.tokenizer,
-                use_chat_template=self.config.use_chat_template,
-                prompt_template=self.config.prompt_template,
-            )
-
-            accuracy = self._compute_accuracy(vector, layer, val_datapoints)
-
-            metrics[value] = {
-                "accuracy": round(accuracy, 4),
-                "n_val_examples": len(val_datapoints),
-            }
-            all_accs.append(accuracy)
-
-            self._log(
-                f"    {value}: Accuracy = {accuracy:.1%} | n = {len(val_datapoints)}"
-            )
-
-        if all_accs:
-            metrics["__overall__"] = {
-                "mean_accuracy": round(float(np.mean(all_accs)), 4),
-                "n_values": len(all_accs),
-                "spearman_rho": spearman_metrics["spearman_rho"],
-                "spearman_p_value": spearman_metrics["spearman_p_value"],
-            }
-            self._log(
-                f"\n  Overall: Accuracy = {np.mean(all_accs):.1%} "
-                f"(across {len(all_accs)} values)"
-            )
-            self._log(
-                f"  Spearman rho = {spearman_metrics['spearman_rho']:.4f} "
-                f"(p = {spearman_metrics['spearman_p_value']:.4g})\n"
-            )
-
-        metrics_path = os.path.join(self.config.output_dir, "eval_metrics.json")
-        with open(metrics_path, "w") as f:
-            json.dump(metrics, f, indent=2)
-
-        return metrics
+        self._log("Geometry analysis complete!")
+        return geometry_metrics
 
     # ─── Save / Load ─────────────────────────────────────────────────────
 
@@ -635,6 +774,13 @@ class SteeringPipeline:
         # 1. Load model
         self.load_model()
 
+        # Nest output under a model-specific subdirectory
+        safe_model = (
+            self.config.model_name.replace("/", "__").replace(" ", "_")
+        )
+        self.config.output_dir = os.path.join(self.config.output_dir, safe_model)
+        Path(self.config.output_dir).mkdir(parents=True, exist_ok=True)
+
         # 2. Prepare data
         self.prepare_data()
 
@@ -650,8 +796,8 @@ class SteeringPipeline:
         # 4. Train vectors
         vectors = self.train_vectors(best_layer)
 
-        # 5. Evaluate
-        metrics = self.evaluate(vectors, best_layer)
+        # 5. Geometry analysis
+        metrics = self.analyze_geometry(vectors)
 
         # 6. Save vectors
         if self.config.save_vectors:

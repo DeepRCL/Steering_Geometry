@@ -15,3 +15,4 @@ SAE/outputs/*
 *.pt
 SAE/sae_models/*
 *.csv
+llm-steering-opt/steering_results/*

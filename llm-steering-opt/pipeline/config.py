@@ -83,14 +83,14 @@ class SteeringConfig:
     """
 
     # ── Model ────────────────────────────────────────────────────────────
-    model_name: str = "Qwen/Qwen3.5-9B"
+    model_name: str = "Qwen/Qwen3.5-9B-Base"
     torch_dtype: str = "bfloat16"   # "float16", "bfloat16", "float32"
     device: str = "cuda"
 
     # ── Dataset ──────────────────────────────────────────────────────────
     dataset_path: str = "final_dataset_v3.csv"
     relations_path: str = "schwartz_relations.json"
-    train_ratio: float = 0.2       # Per-value stratified split ratio
+    train_ratio: float = 0.005       # Per-value stratified split ratio
     random_seed: int = 50
     use_chat_template: bool = True  # Use tokenizer's chat template for prompts
     # Fallback prompt template if chat template is unavailable or disabled
@@ -109,17 +109,14 @@ class SteeringConfig:
     layer_sweep_n_samples: int = 10
 
     # ── Optimization ─────────────────────────────────────────────────────
-    lr: float = 0.1
-    max_iters: int = 20
+    lr: float = 0.01
+    max_iters: int = 30
     max_norm: Optional[float] = None   # None = unconstrained norm
-    starting_norm: float = 1.0
-    coldness: float = 0.7
     # Number of training samples per value for full training (None = all available)
     n_training_samples: Optional[int] = None
-    target_loss: Optional[float] = None  # Early stopping loss threshold
 
     # ── Steering Strength ────────────────────────────────────────────────
-    alpha: float = 10.0  # Multiplier on the vector at evaluation/inference time
+    alpha: float = 40.0  # Multiplier on the vector at evaluation/inference time
 
     # ── Output ───────────────────────────────────────────────────────────
     output_dir: str = "steering_results"

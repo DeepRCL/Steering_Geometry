@@ -2,3 +2,8 @@ mdmm==0.1.3
 numpy==2.2.3
 torch==2.3.1
 transformers==4.45.2
+scipy
+scikit-learn
+umap-learn
+matplotlib
+seaborn

@@ -73,13 +73,8 @@ def parse_args():
                         help="Maximum optimization iterations")
     parser.add_argument("--max_norm", type=float, default=None,
                         help="Maximum vector norm constraint (None = unconstrained)")
-    parser.add_argument("--starting_norm", type=float,
-                        default=SteeringConfig.starting_norm)
-    parser.add_argument("--coldness", type=float, default=SteeringConfig.coldness)
     parser.add_argument("--n_training_samples", type=int, default=None,
                         help="Training samples per value (None = all)")
-    parser.add_argument("--target_loss", type=float, default=None,
-                        help="Early stopping loss threshold")
 
     # Steering
     parser.add_argument("--alpha", type=float, default=SteeringConfig.alpha,
@@ -116,10 +111,7 @@ def main():
         lr=args.lr,
         max_iters=args.max_iters,
         max_norm=args.max_norm,
-        starting_norm=args.starting_norm,
-        coldness=args.coldness,
         n_training_samples=args.n_training_samples,
-        target_loss=args.target_loss,
         alpha=args.alpha,
         output_dir=args.output_dir,
         save_vectors=not args.no_save_vectors,
