@@ -30,10 +30,13 @@ def run_pipeline(config: PipelineConfig, modules_to_run: list):
         
     steering_method = get_steering_method(config.steering_method)
     
-    layers_to_extract = list(range(
-        int(model_info.n_layers * config.layer_start_frac) if model_info else 10,
-        model_info.n_layers if model_info else 30
-    ))
+    if model_info:
+        layer_start_idx = int(model_info.n_layers * config.layer_start_frac)
+        layer_end_idx = model_info.n_layers if config.layer_end_frac >= 1.0 else int(model_info.n_layers * config.layer_end_frac)
+        layer_end_idx = max(layer_start_idx + 1, min(model_info.n_layers, layer_end_idx))
+        layers_to_extract = list(range(layer_start_idx, layer_end_idx))
+    else:
+        layers_to_extract = list(range(10, 30))
     
     vec_dir = config.subdir("vectors")
     act_dir = config.subdir("activations")
@@ -73,7 +76,19 @@ def run_pipeline(config: PipelineConfig, modules_to_run: list):
                         l_idx = int(f.split("_")[1].split(".")[0])
                         vectors_all[val][l_idx] = torch.load(os.path.join(val_vec_dir, f))
 
-    requested = set(modules_to_run)
+    available_layers = sorted({
+        layer_idx
+        for value_vectors in vectors_all.values()
+        for layer_idx in value_vectors.keys()
+    })
+    if requested := set(modules_to_run):
+        needs_vectors = bool(requested.intersection({"layer_select", "evaluate", "geometry"}))
+        if needs_vectors and not available_layers:
+            raise ValueError(
+                "No steering vectors were found on disk for this run. "
+                "Run the extract module successfully before layer selection, evaluation, or geometry."
+            )
+
     if not requested.intersection({"layer_select", "evaluate", "geometry"}):
         print("Requested modules completed.")
         return
@@ -146,7 +161,14 @@ if __name__ == "__main__":
     parser.add_argument("--output_dir", type=str, default="CAA/Geometry/outputs")
     parser.add_argument("--modules", type=str, default="all", help="Comma-separated list: extract,layer_select,evaluate,geometry or 'all'")
     parser.add_argument("--layer_override", type=int, default=None)
-    parser.add_argument("--layer_selection_method", type=str, default="normalized_l2", help="normalized_l2 or eval_accuracy")
+    parser.add_argument(
+        "--layer_selection_method",
+        type=str,
+        default="normalized_l2",
+        help="normalized_l2, projection_snr, linear_probe, or eval_accuracy",
+    )
+    parser.add_argument("--layer_start_frac", type=float, default=0.4, help="Start layer search/extraction at this fraction of depth")
+    parser.add_argument("--layer_end_frac", type=float, default=1.0, help="Stop layer search/extraction before this fraction of depth")
     parser.add_argument("--alpha", type=str, default="0.5,1.0,2.0,4.0", help="Comma-separated alphas")
     
     args = parser.parse_args()
@@ -158,6 +180,8 @@ if __name__ == "__main__":
         output_dir=args.output_dir,
         layer_override=args.layer_override,
         layer_selection_method=args.layer_selection_method,
+        layer_start_frac=args.layer_start_frac,
+        layer_end_frac=args.layer_end_frac,
         alpha_values=[float(a) for a in args.alpha.split(",")]
     )
     

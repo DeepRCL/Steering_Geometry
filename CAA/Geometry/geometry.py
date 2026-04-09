@@ -166,6 +166,7 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     # Additional quantitative geometry metrics
     group_labels = np.array([value_to_group(val) for val in SCHWARTZ_CIRCUMPLEX_ORDER])
     clipped_dist_matrix = np.maximum(0.0, 1.0 - empirical_sim)
+    np.fill_diagonal(clipped_dist_matrix, 0.0)
     silhouette = silhouette_score(clipped_dist_matrix, group_labels, metric="precomputed")
 
     same_group_mask = []

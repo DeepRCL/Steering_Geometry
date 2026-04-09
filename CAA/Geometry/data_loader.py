@@ -100,6 +100,12 @@ class PromptFormatter:
         self.tokenizer = tokenizer
         self.is_instruct = is_instruct
 
+    def _format_base_prompt(self, prompt_text: str) -> str:
+        if self.is_instruct and getattr(self.tokenizer, "chat_template", None):
+            messages = [{"role": "user", "content": prompt_text}]
+            return self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        return prompt_text + "\nResponse:"
+
     def format_extraction_prompts(self, pair: ContrastivePair) -> Tuple[List[int], List[int]]:
         """
         Formats prompts to extract positive and negative activations.
@@ -128,12 +134,7 @@ class PromptFormatter:
         )
         
         # Format matching model's expected style (Instruct vs Base)
-        if self.is_instruct:
-            messages = [{"role": "user", "content": prompt_text}]
-            # Don't add generation prompt yet because we need to manually append the answer prefix
-            base_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        else:
-            base_prompt = prompt_text + "\nResponse:"
+        base_prompt = self._format_base_prompt(prompt_text)
             
         pos_prompt = base_prompt + f" ({pos_option}"
         neg_prompt = base_prompt + f" ({neg_option}"
@@ -161,11 +162,7 @@ class PromptFormatter:
             f"(B) {b_text}"
         )
         
-        if self.is_instruct:
-            messages = [{"role": "user", "content": prompt_text}]
-            base_prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-        else:
-            base_prompt = prompt_text + "\nResponse:"
+        base_prompt = self._format_base_prompt(prompt_text)
             
         eval_prompt = base_prompt + " ("
         

@@ -88,6 +88,7 @@ class PipelineConfig:
 
     # Layer selection
     layer_start_frac: float = 0.4   # start extraction from this fraction of depth
+    layer_end_frac: float = 1.0     # stop extraction/selection before this fraction of depth
     layer_override: Optional[int] = None  # skip auto-selection, use this layer
     layer_selection_method: str = "normalized_l2"
 
