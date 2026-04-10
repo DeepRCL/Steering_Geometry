@@ -60,9 +60,9 @@ HIGHER_ORDER_GROUPS = {
 }
 
 GROUP_COLORS = {
-    "Openness to Change": "#2196F3",
+    "Openness to Change": "#D4A017",
     "Self-Enhancement":   "#F44336",
-    "Conservation":       "#FF9800",
+    "Conservation":       "#1E88E5",
     "Self-Transcendence": "#4CAF50",
 }
 

@@ -98,7 +98,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--seed", type=int, default=42)
 
     # ── Model ─────────────────────────────────────────────────────────────────
-    p.add_argument("--model_name", default="Qwen/Qwen3.5-9B")
+    p.add_argument("--model_name", default="Qwen/Qwen3.5-9B-Base")
     p.add_argument(
         "--device",
         default="auto",

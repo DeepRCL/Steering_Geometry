@@ -41,6 +41,11 @@ from .config import (
     value_to_group,
 )
 
+PLOT_LABEL_FONTSIZE = 13
+PLOT_TITLE_FONTSIZE = 18
+PLOT_LEGEND_FONTSIZE = 13
+PLOT_MARKER_SIZE = 150
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Small helpers
@@ -54,7 +59,7 @@ def _legend_handles() -> list:
         Line2D(
             [0], [0],
             marker="o", color="w",
-            markerfacecolor=c, markersize=10,
+            markerfacecolor=c, markersize=12,
             label=g,
         )
         for g, c in GROUP_COLORS.items()
@@ -108,7 +113,7 @@ def _spearman(emp: np.ndarray, theo: np.ndarray) -> Tuple[float, float]:
 # ──────────────────────────────────────────────────────────────────────────────
 def _plot_heatmap(mat: np.ndarray, title: str, path: str) -> None:
     labels = [_short(v) for v in SCHWARTZ_CIRCUMPLEX_ORDER]
-    fig, ax = plt.subplots(figsize=(14, 12))
+    fig, ax = plt.subplots(figsize=(15, 13))
     sns.heatmap(
         mat,
         xticklabels=labels,
@@ -120,28 +125,31 @@ def _plot_heatmap(mat: np.ndarray, title: str, path: str) -> None:
         linewidths=0.3,
         linecolor="lightgrey",
     )
-    ax.set_title(title, fontsize=13)
-    ax.tick_params(axis="x", rotation=45, labelsize=8)
-    ax.tick_params(axis="y", rotation=0, labelsize=8)
+    ax.set_title(title, fontsize=PLOT_TITLE_FONTSIZE)
+    ax.tick_params(axis="x", rotation=45, labelsize=10)
+    ax.tick_params(axis="y", rotation=0, labelsize=10)
     plt.tight_layout()
     plt.savefig(path, dpi=200)
     plt.close()
 
 
 def _plot_embedding(coords: np.ndarray, title: str, path: str) -> None:
-    fig, ax = plt.subplots(figsize=(10, 8))
+    fig, ax = plt.subplots(figsize=(14, 11))
     for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
         color = GROUP_COLORS.get(value_to_group(val), "black")
-        ax.scatter(coords[i, 0], coords[i, 1], c=color, s=100, zorder=3)
+        ax.scatter(coords[i, 0], coords[i, 1], c=color, s=PLOT_MARKER_SIZE, edgecolors="white", linewidths=1.2, zorder=3)
         ax.annotate(
             _short(val),
             (coords[i, 0], coords[i, 1]),
-            xytext=(5, 5),
+            xytext=(7, 7),
             textcoords="offset points",
-            fontsize=9,
+            fontsize=PLOT_LABEL_FONTSIZE,
+            fontweight="semibold",
+            bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.75),
         )
-    ax.legend(handles=_legend_handles(), loc="best")
-    ax.set_title(title)
+    ax.legend(handles=_legend_handles(), loc="best", fontsize=PLOT_LEGEND_FONTSIZE)
+    ax.set_title(title, fontsize=PLOT_TITLE_FONTSIZE)
+    ax.tick_params(axis="both", labelsize=12)
     plt.tight_layout()
     plt.savefig(path, dpi=200)
     plt.close()
@@ -165,7 +173,7 @@ def _plot_mds(emp_sim: np.ndarray, title: str, path: str, seed: int) -> None:
     R, _ = orthogonal_procrustes(X_mds, X_circle)
     X_aligned = X_mds @ R
 
-    fig, ax = plt.subplots(figsize=(12, 12))
+    fig, ax = plt.subplots(figsize=(15, 15))
     ax.add_patch(plt.Circle((0, 0), 1, color="lightgray", fill=False, linestyle="--"))
 
     for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
@@ -173,25 +181,28 @@ def _plot_mds(emp_sim: np.ndarray, title: str, path: str, seed: int) -> None:
         ex, ey = X_aligned[i]
         color = GROUP_COLORS.get(value_to_group(val), "black")
 
-        ax.plot(tx, ty, "x", color="gray", markersize=8)
-        ax.plot(ex, ey, "o", color=color, markersize=8)
+        ax.plot(tx, ty, "x", color="gray", markersize=9)
+        ax.plot(ex, ey, "o", color=color, markersize=10, markeredgecolor="white", markeredgewidth=1.0)
         ax.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
         ax.annotate(
             _short(val),
             (ex, ey),
-            xytext=(5, 5),
+            xytext=(8, 8),
             textcoords="offset points",
-            fontsize=9,
+            fontsize=PLOT_LABEL_FONTSIZE,
+            fontweight="semibold",
             color=color,
+            bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
         )
 
-    ax.legend(handles=_legend_handles())
-    ax.set_title(f"{title}\n(grey ×: Schwartz theory,  coloured ●: empirical)")
+    ax.legend(handles=_legend_handles(), fontsize=PLOT_LEGEND_FONTSIZE)
+    ax.set_title(f"{title}\n(grey ×: Schwartz theory,  coloured ●: empirical)", fontsize=PLOT_TITLE_FONTSIZE)
     ax.set_aspect("equal")
     lim = max(np.abs(X_aligned).max(), 1.0) * 1.25
     ax.set_xlim(-lim, lim)
     ax.set_ylim(-lim, lim)
     ax.grid(alpha=0.2)
+    ax.tick_params(axis="both", labelsize=12)
     plt.tight_layout()
     plt.savefig(path, dpi=200)
     plt.close()

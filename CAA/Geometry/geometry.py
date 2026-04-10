@@ -16,28 +16,37 @@ from typing import Dict
 
 from .config import PipelineConfig, SCHWARTZ_CIRCUMPLEX_ORDER, HIGHER_ORDER_GROUPS, value_to_group, GROUP_COLORS, safe_name
 
+PLOT_LABEL_FONTSIZE = 13
+PLOT_TITLE_FONTSIZE = 18
+PLOT_LEGEND_FONTSIZE = 13
+PLOT_MARKER_SIZE = 150
+
 
 def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
-    plt.figure(figsize=(10, 8))
+    plt.figure(figsize=(14, 11))
     for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
         group = value_to_group(val)
         color = GROUP_COLORS.get(group, "black")
-        plt.scatter(coords[i, 0], coords[i, 1], c=color, s=100)
+        plt.scatter(coords[i, 0], coords[i, 1], c=color, s=PLOT_MARKER_SIZE, edgecolors="white", linewidths=1.2)
         plt.annotate(
             val.split(":")[-1].strip(),
             (coords[i, 0], coords[i, 1]),
-            xytext=(5, 5),
+            xytext=(7, 7),
             textcoords="offset points",
-            fontsize=9,
+            fontsize=PLOT_LABEL_FONTSIZE,
+            fontweight="semibold",
+            bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.75),
         )
 
     from matplotlib.lines import Line2D
     legend_els = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markersize=10, label=g)
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markersize=12, label=g)
         for g, c in GROUP_COLORS.items()
     ]
-    plt.legend(handles=legend_els, loc="best")
-    plt.title(title)
+    plt.legend(handles=legend_els, loc="best", fontsize=PLOT_LEGEND_FONTSIZE)
+    plt.title(title, fontsize=PLOT_TITLE_FONTSIZE)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
     plt.close()
@@ -102,16 +111,20 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     # 4. Visualizations
     
     # Heatmaps
-    plt.figure(figsize=(12, 10))
+    plt.figure(figsize=(14, 12))
     sns.heatmap(empirical_sim, xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER, yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER, cmap='coolwarm', vmin=-1, vmax=1)
-    plt.title('Empirical Cosine Similarities')
+    plt.title('Empirical Cosine Similarities', fontsize=PLOT_TITLE_FONTSIZE)
+    plt.xticks(fontsize=10, rotation=45, ha="right")
+    plt.yticks(fontsize=10)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap.png"), dpi=300)
     plt.close()
     
-    plt.figure(figsize=(12, 10))
+    plt.figure(figsize=(14, 12))
     sns.heatmap(theoretical_sim, xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER, yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER, cmap='coolwarm', vmin=-1, vmax=1)
-    plt.title('Theoretical Relationships')
+    plt.title('Theoretical Relationships', fontsize=PLOT_TITLE_FONTSIZE)
+    plt.xticks(fontsize=10, rotation=45, ha="right")
+    plt.yticks(fontsize=10)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "theoretical_similarity_heatmap.png"), dpi=300)
     plt.close()
@@ -226,7 +239,7 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     with open(os.path.join(out_dir, "geometry_metrics.json"), "w") as f:
         json.dump(geometry_metrics, f, indent=2)
     
-    plt.figure(figsize=(12, 12))
+    plt.figure(figsize=(15, 15))
     # Draw theoretical circle
     circle = plt.Circle((0, 0), 1, color='lightgray', fill=False, linestyle='--')
     plt.gca().add_patch(circle)
@@ -234,22 +247,31 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
         # Theoretical pos
         tx, ty = X_circle[i]
-        plt.plot(tx, ty, 'x', color='gray', markersize=8)
+        plt.plot(tx, ty, 'x', color='gray', markersize=9)
         
         # Empirical pos
         ex, ey = X_mds_aligned[i]
         group = value_to_group(val)
         color = GROUP_COLORS.get(group, "black")
         
-        plt.plot(ex, ey, 'o', color=color, markersize=8)
+        plt.plot(ex, ey, 'o', color=color, markersize=10, markeredgecolor='white', markeredgewidth=1.0)
         
         # Draw line connecting theoretical to empirical
         plt.plot([tx, ex], [ty, ey], color='gray', alpha=0.3, linestyle=':')
         
         label = val.split(':')[-1].strip()
-        plt.annotate(label, (ex, ey), xytext=(5, 5), textcoords='offset points', fontsize=9, color=color)
+        plt.annotate(
+            label,
+            (ex, ey),
+            xytext=(8, 8),
+            textcoords='offset points',
+            fontsize=PLOT_LABEL_FONTSIZE,
+            fontweight="semibold",
+            color=color,
+            bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
+        )
         
-    plt.title('2D MDS Aligned to Theoretical Circumplex')
+    plt.title('2D MDS Aligned to Theoretical Circumplex', fontsize=PLOT_TITLE_FONTSIZE)
     plt.axis('equal')
     # Set limits clearly showing unit circle
     scale = np.max(np.abs(X_mds_aligned))
@@ -257,6 +279,8 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     plt.xlim(-lim, lim)
     plt.ylim(-lim, lim)
     plt.grid(alpha=0.2)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "mds_circumplex.png"), dpi=300)
     plt.close()
