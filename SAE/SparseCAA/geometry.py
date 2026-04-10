@@ -30,11 +30,14 @@ import torch.nn.functional as F
 import umap
 from matplotlib.lines import Line2D
 from scipy.linalg import orthogonal_procrustes
-from scipy.stats import spearmanr
+from scipy.spatial import procrustes
+from scipy.stats import pearsonr, spearmanr
 from sklearn.decomposition import PCA
+from sklearn.metrics import silhouette_score
 from sklearn.manifold import MDS, TSNE
 
 from .config import (
+    HIGHER_ORDER_GROUPS,
     GROUP_COLORS,
     SCHWARTZ_CIRCUMPLEX_ORDER,
     SparseCAAPipelineConfig,
@@ -108,6 +111,71 @@ def _spearman(emp: np.ndarray, theo: np.ndarray) -> Tuple[float, float]:
     return float(rho), float(pval)
 
 
+def _circular_step_distance(i: int, j: int, n: int) -> int:
+    return min(abs(i - j), n - abs(i - j))
+
+
+def _theoretical_circle_points(num_values: int) -> np.ndarray:
+    """
+    Place Schwartz values on a presentation-oriented circumplex.
+
+    The fixed order in SCHWARTZ_CIRCUMPLEX_ORDER is preserved, but the circle is
+    rotated and oriented clockwise so the higher-order quadrants read as:
+      top-right  = Openness to Change
+      bottom-right = Self-Enhancement
+      bottom-left = Conservation
+      top-left = Self-Transcendence
+    """
+    start_angle_deg = 72.0
+    step_deg = 360.0 / num_values
+    angles = np.deg2rad(start_angle_deg - np.arange(num_values) * step_deg)
+    return np.column_stack([np.cos(angles), np.sin(angles)])
+
+
+def _lower_order_family(value: str) -> str:
+    return value.split(":")[0].strip() if ":" in value else value
+
+
+def _higher_order_groups_for_value(value: str) -> set[str]:
+    boundary_groups = {
+        "Hedonism": {"Openness to Change", "Self-Enhancement"},
+        "Face": {"Self-Enhancement", "Conservation"},
+        "Humility": {"Conservation", "Self-Transcendence"},
+    }
+    if value in boundary_groups:
+        return boundary_groups[value]
+
+    groups = set()
+    for group_name, members in HIGHER_ORDER_GROUPS.items():
+        if value in members:
+            groups.add(group_name)
+    return groups
+
+
+def _groups_are_opposite(group_a: str, group_b: str) -> bool:
+    opposite_pairs = {
+        frozenset({"Openness to Change", "Conservation"}),
+        frozenset({"Self-Enhancement", "Self-Transcendence"}),
+    }
+    return frozenset({group_a, group_b}) in opposite_pairs
+
+
+def _hierarchical_theory_distance(value_a: str, value_b: str) -> tuple[int, str]:
+    if _lower_order_family(value_a) == _lower_order_family(value_b):
+        return 1, "same_lower_order"
+
+    groups_a = _higher_order_groups_for_value(value_a)
+    groups_b = _higher_order_groups_for_value(value_b)
+
+    if groups_a & groups_b:
+        return 2, "same_higher_order"
+
+    if any(_groups_are_opposite(group_a, group_b) for group_a in groups_a for group_b in groups_b):
+        return 10, "opposite_higher_order"
+
+    return 5, "no_relation"
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Plotting
 # ──────────────────────────────────────────────────────────────────────────────
@@ -168,8 +236,7 @@ def _plot_mds(emp_sim: np.ndarray, title: str, path: str, seed: int) -> None:
     )
     X_mds = mds.fit_transform(dist)
 
-    angles = np.linspace(0, 2 * np.pi, n, endpoint=False)
-    X_circle = np.column_stack([np.cos(angles), np.sin(angles)])
+    X_circle = _theoretical_circle_points(n)
     R, _ = orthogonal_procrustes(X_mds, X_circle)
     X_aligned = X_mds @ R
 
@@ -222,6 +289,11 @@ def _run_geometry_variant(
     unit_vecs = _unit_vecs(vectors)
     emp_sim = _empirical_sim(unit_vecs)
     rho, pval = _spearman(emp_sim, theo_sim)
+    n = len(SCHWARTZ_CIRCUMPLEX_ORDER)
+    triu = np.triu_indices(n, k=1)
+    emp_flat = emp_sim[triu]
+    theo_flat = theo_sim[triu]
+    pearson_r, pearson_p = pearsonr(emp_flat, theo_flat)
 
     # Spearman report
     report = {
@@ -274,6 +346,110 @@ def _run_geometry_variant(
         os.path.join(out_dir, "mds_circumplex.png"),
         config.seed,
     )
+
+    dist = np.clip(1.0 - emp_sim, 0.0, None)
+    np.fill_diagonal(dist, 0.0)
+    mds = MDS(
+        n_components=2,
+        dissimilarity="precomputed",
+        random_state=config.seed,
+        n_init=4,
+        normalized_stress="auto",
+    )
+    X_mds = mds.fit_transform(dist)
+
+    X_circle = _theoretical_circle_points(n)
+    R, _ = orthogonal_procrustes(X_mds, X_circle)
+    X_aligned = X_mds @ R
+
+    group_labels = np.array([value_to_group(val) for val in SCHWARTZ_CIRCUMPLEX_ORDER])
+    silhouette = silhouette_score(dist, group_labels, metric="precomputed")
+
+    same_group_mask = []
+    different_group_mask = []
+    circular_step_flat = []
+    neighbor_empirical = []
+    opposite_empirical = []
+    hierarchical_distance_flat = []
+    same_lower_empirical = []
+    same_higher_empirical = []
+    no_relation_empirical = []
+    opposite_higher_empirical = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            same_group = value_to_group(SCHWARTZ_CIRCUMPLEX_ORDER[i]) == value_to_group(SCHWARTZ_CIRCUMPLEX_ORDER[j])
+            same_group_mask.append(same_group)
+            different_group_mask.append(not same_group)
+
+            step = _circular_step_distance(i, j, n)
+            circular_step_flat.append(step)
+            if step == 1:
+                neighbor_empirical.append(emp_sim[i, j])
+            if step == n // 2:
+                opposite_empirical.append(emp_sim[i, j])
+
+            hierarchical_distance, relation_bucket = _hierarchical_theory_distance(
+                SCHWARTZ_CIRCUMPLEX_ORDER[i],
+                SCHWARTZ_CIRCUMPLEX_ORDER[j],
+            )
+            hierarchical_distance_flat.append(hierarchical_distance)
+            if relation_bucket == "same_lower_order":
+                same_lower_empirical.append(emp_sim[i, j])
+            elif relation_bucket == "same_higher_order":
+                same_higher_empirical.append(emp_sim[i, j])
+            elif relation_bucket == "opposite_higher_order":
+                opposite_higher_empirical.append(emp_sim[i, j])
+            else:
+                no_relation_empirical.append(emp_sim[i, j])
+
+    same_group_mask = np.array(same_group_mask, dtype=bool)
+    different_group_mask = np.array(different_group_mask, dtype=bool)
+    circular_step_flat = np.array(circular_step_flat, dtype=float)
+    hierarchical_distance_flat = np.array(hierarchical_distance_flat, dtype=float)
+
+    within_group_mean = float(emp_flat[same_group_mask].mean())
+    across_group_mean = float(emp_flat[different_group_mask].mean())
+    neighbor_mean = float(np.mean(neighbor_empirical))
+    opposite_mean = float(np.mean(opposite_empirical))
+    circular_distance_spearman, circular_distance_p = spearmanr(emp_flat, -circular_step_flat)
+    hierarchical_distance_spearman, hierarchical_distance_p = spearmanr(emp_flat, -hierarchical_distance_flat)
+
+    same_lower_mean = float(np.mean(same_lower_empirical)) if same_lower_empirical else float("nan")
+    same_higher_mean = float(np.mean(same_higher_empirical)) if same_higher_empirical else float("nan")
+    no_relation_mean = float(np.mean(no_relation_empirical)) if no_relation_empirical else float("nan")
+    opposite_higher_mean = float(np.mean(opposite_higher_empirical)) if opposite_higher_empirical else float("nan")
+
+    _, _, procrustes_disparity = procrustes(X_circle, X_mds)
+    procrustes_rmse = float(np.sqrt(np.mean(np.sum((X_aligned - X_circle) ** 2, axis=1))))
+
+    geometry_metrics = {
+        "label": label,
+        "spearman_rho": float(rho),
+        "spearman_p_value": float(pval),
+        "pearson_r": float(pearson_r),
+        "pearson_p_value": float(pearson_p),
+        "num_pairs": int(emp_flat.shape[0]),
+        "silhouette_by_higher_order_group": float(silhouette),
+        "within_group_mean_cosine": within_group_mean,
+        "across_group_mean_cosine": across_group_mean,
+        "within_minus_across_cosine": float(within_group_mean - across_group_mean),
+        "neighbor_mean_cosine": neighbor_mean,
+        "opposite_mean_cosine": opposite_mean,
+        "neighbor_minus_opposite_cosine": float(neighbor_mean - opposite_mean),
+        "circular_distance_spearman": float(circular_distance_spearman),
+        "circular_distance_p_value": float(circular_distance_p),
+        "hierarchical_distance_spearman": float(hierarchical_distance_spearman),
+        "hierarchical_distance_p_value": float(hierarchical_distance_p),
+        "same_lower_order_mean_cosine": same_lower_mean,
+        "same_higher_order_mean_cosine": same_higher_mean,
+        "no_relation_mean_cosine": no_relation_mean,
+        "opposite_higher_order_mean_cosine": opposite_higher_mean,
+        "procrustes_disparity": float(procrustes_disparity),
+        "procrustes_rmse_after_alignment": procrustes_rmse,
+        "mds_stress": float(mds.stress_),
+    }
+    with open(os.path.join(out_dir, "geometry_metrics.json"), "w") as f:
+        json.dump(geometry_metrics, f, indent=2)
 
     return report
 

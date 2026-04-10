@@ -221,6 +221,7 @@ def run_centered_vector_experiment(
     alpha_values,
     transform: str,
     run_geometry: bool,
+    geometry_only: bool,
 ):
     source_config = PipelineConfig(
         model_name=model_name,
@@ -257,29 +258,31 @@ def run_centered_vector_experiment(
                 "source_output_dir": source_output_dir,
                 "selected_layer": selected_layer,
                 "alpha_values": alpha_values,
+                "geometry_only": geometry_only,
             },
             f,
             indent=2,
         )
 
-    model_info = load_model(model_name, device=experiment_config.device)
-    data_loader = DataLoader(dataset_path, eval_split=experiment_config.eval_split, seed=experiment_config.seed)
-    steering_method = CAASteeringMethod()
-
     target_vectors = {val: transformed_vectors[val][selected_layer] for val in SCHWARTZ_CIRCUMPLEX_ORDER}
-    evaluate_steering(experiment_config, data_loader, model_info, steering_method, target_vectors, selected_layer)
+    if not geometry_only:
+        model_info = load_model(model_name, device=experiment_config.device)
+        data_loader = DataLoader(dataset_path, eval_split=experiment_config.eval_split, seed=experiment_config.seed)
+        steering_method = CAASteeringMethod()
+        evaluate_steering(experiment_config, data_loader, model_info, steering_method, target_vectors, selected_layer)
 
     if run_geometry:
         analyze_geometry(experiment_config, target_vectors)
 
-    previous_eval_path = os.path.join(source_output_dir, model_name_safe, "evaluation", "eval_results.json")
-    centered_eval_path = os.path.join(experiment_output_dir, model_name_safe, "evaluation", "eval_results.json")
-    previous_results = _load_eval_results(previous_eval_path)
-    centered_results = _load_eval_results(centered_eval_path)
-    comparison = _compare_results(previous_results, centered_results)
+    if not geometry_only:
+        previous_eval_path = os.path.join(source_output_dir, model_name_safe, "evaluation", "eval_results.json")
+        centered_eval_path = os.path.join(experiment_output_dir, model_name_safe, "evaluation", "eval_results.json")
+        previous_results = _load_eval_results(previous_eval_path)
+        centered_results = _load_eval_results(centered_eval_path)
+        comparison = _compare_results(previous_results, centered_results)
 
-    comparison_dir = os.path.join(experiment_output_dir, model_name_safe, "comparison")
-    _save_comparison_artifacts(comparison, comparison_dir)
+        comparison_dir = os.path.join(experiment_output_dir, model_name_safe, "comparison")
+        _save_comparison_artifacts(comparison, comparison_dir)
 
 
 if __name__ == "__main__":
@@ -297,6 +300,7 @@ if __name__ == "__main__":
     parser.add_argument("--alpha", type=str, default="0.5,1.0,2.0,4.0", help="Comma-separated alphas")
     parser.add_argument("--transform", type=str, default="centered", help="centered or centered_renorm")
     parser.add_argument("--run_geometry", action="store_true")
+    parser.add_argument("--geometry_only", action="store_true", help="Recompute transformed vectors and geometry only; skip evaluation and comparison")
     args = parser.parse_args()
 
     default_suffix = "_centered_renorm" if args.transform == "centered_renorm" else "_centered"
@@ -311,4 +315,5 @@ if __name__ == "__main__":
         alpha_values=[float(a) for a in args.alpha.split(",")],
         transform=args.transform,
         run_geometry=args.run_geometry,
+        geometry_only=args.geometry_only,
     )
