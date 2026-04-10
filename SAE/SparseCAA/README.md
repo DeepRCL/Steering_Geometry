@@ -41,7 +41,7 @@ All 20 Schwartz values are covered with no low-confidence values.
 | `finetune` | Yes (Qwen) | Collect all-token MLP activations from dataset; fine-tune SAE on them (MSE + L1); save `sae_finetuned.pt` |
 | `extract` | Yes (Qwen) | For each value's training pairs: hook last-token MLP → SAE encode → sparse code; `persona_vec = mean(z_pos) − mean(z_neg)` |
 | `evaluate` | Yes (Qwen) | Sparse steering hook during A/B inference; measure logit accuracy per alpha |
-| `geometry` | No | Spearman ρ, UMAP, t-SNE, MDS circumplex, heatmaps for **raw** and **mean-centred** vectors |
+| `geometry` | No | Geometry metrics (`Spearman ρ`, `Pearson r`, circular/hierarchical alignment, lower-minus-opposite cosine), UMAP, t-SNE, MDS circumplex, heatmaps for **raw** and **mean-centred** vectors |
 
 ---
 
@@ -149,6 +149,8 @@ SAE/SparseCAA/outputs/Qwen__Qwen3.5-9B/
 ### Geometry
 
 - **Spearman ρ** (`spearman_report.json`): correlation between empirical cosine similarity matrix and the theoretical Schwartz circumplex matrix. Higher (closer to +1) means the geometry reflects Schwartz theory better.
+- **`geometry_metrics.json`**: richer quantitative report including `spearman_rho`, `pearson_r`, `circular_distance_spearman`, `hierarchical_distance_spearman`, and `lower_minus_opposite_cosine`.
+- **`lower_minus_opposite_cosine`**: mean cosine for same lower-order families minus mean cosine for opposite higher-order pairs. Larger positive values mean closely related values are substantially nearer than theoretical opposites.
 - **MDS circumplex**: empirical dots (coloured) vs. theoretical positions (grey ×). If the SAE space captures value structure, dots should spread around the circle in the correct group order.
 - **Mean-centred vs raw**: subtracting the mean sparse vector removes the shared "baseline activation" direction. If mean-centred ρ > raw ρ, the common component was masking value-specific geometry.
 

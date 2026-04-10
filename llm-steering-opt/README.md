@@ -2,6 +2,20 @@
 
 This library contains functions for optimizing steering vectors for LLMs that induce or suppress specific behaviors.
 
+In this repo, the optimization pipeline also supports Schwartz value geometry analysis and writes `geometry/geometry_metrics.json`, including:
+
+- `spearman_rho`
+- `pearson_r`
+- `circular_distance_spearman`
+- `hierarchical_distance_spearman`
+- `lower_minus_opposite_cosine`
+
+The last metric is an interpretable separation score:
+
+- `lower_minus_opposite_cosine = same_lower_order_mean_cosine - opposite_higher_order_mean_cosine`
+
+Higher positive values indicate that values from the same lower-order Schwartz family are much closer in steering space than theoretically opposite values.
+
 For a quick tutorial on how to use this library, take a look at the notebook `quickstart.ipynb`.
 
 For per-function documentation, refer to the docstrings in `steering_opt.py`. (Nicer documentation pages are currently under construction.)

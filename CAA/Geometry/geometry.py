@@ -58,18 +58,15 @@ def _circular_step_distance(i: int, j: int, n: int) -> int:
 
 def _theoretical_circle_points(num_values: int) -> np.ndarray:
     """
-    Place Schwartz values on a presentation-oriented circumplex.
+    Place Schwartz values on the canonical circumplex.
 
-    The fixed order in SCHWARTZ_CIRCUMPLEX_ORDER is preserved, but the circle is
-    rotated and oriented clockwise so the higher-order quadrants read as:
-      top-right  = Openness to Change
-      bottom-right = Self-Enhancement
-      bottom-left = Conservation
-      top-left = Self-Transcendence
+    The fixed order in SCHWARTZ_CIRCUMPLEX_ORDER is the important part.
+    We therefore use the standard evenly spaced unit-circle construction and
+    let Procrustes choose the best rigid alignment for the empirical MDS
+    solution. This yields more stable and visually faithful plots than
+    hard-coding presentation quadrants into the template itself.
     """
-    start_angle_deg = 72.0
-    step_deg = 360.0 / num_values
-    angles = np.deg2rad(start_angle_deg - np.arange(num_values) * step_deg)
+    angles = np.linspace(0.0, 2.0 * np.pi, num_values, endpoint=False)
     return np.column_stack([np.cos(angles), np.sin(angles)])
 
 
@@ -295,6 +292,7 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
     same_higher_mean = float(np.mean(same_higher_empirical)) if same_higher_empirical else float("nan")
     no_relation_mean = float(np.mean(no_relation_empirical)) if no_relation_empirical else float("nan")
     opposite_higher_mean = float(np.mean(opposite_higher_empirical)) if opposite_higher_empirical else float("nan")
+    lower_minus_opposite = same_lower_mean - opposite_higher_mean
 
     _, _, procrustes_disparity = procrustes(X_circle, X_mds)
     procrustes_rmse = float(np.sqrt(np.mean(np.sum((X_mds_aligned - X_circle) ** 2, axis=1))))
@@ -320,6 +318,7 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
         "same_higher_order_mean_cosine": same_higher_mean,
         "no_relation_mean_cosine": no_relation_mean,
         "opposite_higher_order_mean_cosine": opposite_higher_mean,
+        "lower_minus_opposite_cosine": lower_minus_opposite,
         "procrustes_disparity": float(procrustes_disparity),
         "procrustes_rmse_after_alignment": procrustes_rmse,
         "mds_stress": float(mds.stress_),

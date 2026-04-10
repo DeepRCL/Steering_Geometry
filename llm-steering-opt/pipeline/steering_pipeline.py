@@ -646,6 +646,50 @@ class SteeringPipeline:
         return min(abs(i - j), n - abs(i - j))
 
     @staticmethod
+    def _lower_order_family(value: str) -> str:
+        return value.split(":")[0].strip() if ":" in value else value
+
+    @staticmethod
+    def _higher_order_groups_for_value(value: str) -> set[str]:
+        boundary_groups = {
+            "Hedonism": {"Openness to Change", "Self-Enhancement"},
+            "Face": {"Self-Enhancement", "Conservation"},
+            "Humility": {"Conservation", "Self-Transcendence"},
+        }
+        if value in boundary_groups:
+            return boundary_groups[value]
+
+        groups = set()
+        for group_name, members in HIGHER_ORDER_GROUPS.items():
+            if value in members:
+                groups.add(group_name)
+        return groups
+
+    @staticmethod
+    def _groups_are_opposite(group_a: str, group_b: str) -> bool:
+        opposite_pairs = {
+            frozenset({"Openness to Change", "Conservation"}),
+            frozenset({"Self-Enhancement", "Self-Transcendence"}),
+        }
+        return frozenset({group_a, group_b}) in opposite_pairs
+
+    @classmethod
+    def _hierarchical_theory_distance(cls, value_a: str, value_b: str) -> tuple[int, str]:
+        if cls._lower_order_family(value_a) == cls._lower_order_family(value_b):
+            return 1, "same_lower_order"
+
+        groups_a = cls._higher_order_groups_for_value(value_a)
+        groups_b = cls._higher_order_groups_for_value(value_b)
+
+        if groups_a & groups_b:
+            return 2, "same_higher_order"
+
+        if any(cls._groups_are_opposite(group_a, group_b) for group_a in groups_a for group_b in groups_b):
+            return 10, "opposite_higher_order"
+
+        return 5, "no_relation"
+
+    @staticmethod
     def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
         """Scatter plot of a 2-D embedding, coloured by Schwartz higher-order group."""
         plt.figure(figsize=(10, 8))
@@ -896,6 +940,11 @@ class SteeringPipeline:
         circular_step_flat = []
         neighbor_empirical = []
         opposite_empirical = []
+        hierarchical_distance_flat = []
+        same_lower_empirical = []
+        same_higher_empirical = []
+        no_relation_empirical = []
+        opposite_higher_empirical = []
         for i in range(num_values):
             for j in range(i + 1, num_values):
                 same = (
@@ -912,9 +961,24 @@ class SteeringPipeline:
                 if step == num_values // 2:
                     opposite_empirical.append(empirical_sim[i, j])
 
+                hierarchical_distance, relation_bucket = self._hierarchical_theory_distance(
+                    SCHWARTZ_CIRCUMPLEX_ORDER[i],
+                    SCHWARTZ_CIRCUMPLEX_ORDER[j],
+                )
+                hierarchical_distance_flat.append(hierarchical_distance)
+                if relation_bucket == "same_lower_order":
+                    same_lower_empirical.append(empirical_sim[i, j])
+                elif relation_bucket == "same_higher_order":
+                    same_higher_empirical.append(empirical_sim[i, j])
+                elif relation_bucket == "opposite_higher_order":
+                    opposite_higher_empirical.append(empirical_sim[i, j])
+                else:
+                    no_relation_empirical.append(empirical_sim[i, j])
+
         same_group_mask = np.array(same_group_mask, dtype=bool)
         different_group_mask = np.array(different_group_mask, dtype=bool)
         circular_step_flat = np.array(circular_step_flat, dtype=float)
+        hierarchical_distance_flat = np.array(hierarchical_distance_flat, dtype=float)
 
         within_group_mean = float(emp_flat[same_group_mask].mean())
         across_group_mean = float(emp_flat[different_group_mask].mean())
@@ -926,6 +990,15 @@ class SteeringPipeline:
         circular_distance_spearman, circular_distance_p = spearmanr(
             emp_flat, -circular_step_flat
         )
+        hierarchical_distance_spearman, hierarchical_distance_p = spearmanr(
+            emp_flat, -hierarchical_distance_flat
+        )
+
+        same_lower_mean = float(np.mean(same_lower_empirical)) if same_lower_empirical else float("nan")
+        same_higher_mean = float(np.mean(same_higher_empirical)) if same_higher_empirical else float("nan")
+        no_relation_mean = float(np.mean(no_relation_empirical)) if no_relation_empirical else float("nan")
+        opposite_higher_mean = float(np.mean(opposite_higher_empirical)) if opposite_higher_empirical else float("nan")
+        lower_minus_opposite = same_lower_mean - opposite_higher_mean
 
         _, _, procrustes_disparity = procrustes(X_circle, X_mds)
         procrustes_rmse = float(
@@ -947,6 +1020,13 @@ class SteeringPipeline:
             "neighbor_minus_opposite_cosine": neighbor_minus_opposite,
             "circular_distance_spearman": float(circular_distance_spearman),
             "circular_distance_p_value": float(circular_distance_p),
+            "hierarchical_distance_spearman": float(hierarchical_distance_spearman),
+            "hierarchical_distance_p_value": float(hierarchical_distance_p),
+            "same_lower_order_mean_cosine": same_lower_mean,
+            "same_higher_order_mean_cosine": same_higher_mean,
+            "no_relation_mean_cosine": no_relation_mean,
+            "opposite_higher_order_mean_cosine": opposite_higher_mean,
+            "lower_minus_opposite_cosine": lower_minus_opposite,
             "procrustes_disparity": float(procrustes_disparity),
             "procrustes_rmse_after_alignment": procrustes_rmse,
             "mds_stress": float(mds.stress_),
@@ -1237,4 +1317,3 @@ class SteeringPipeline:
             .replace(" ", "_")
             .replace("-", "_")
         )
-
