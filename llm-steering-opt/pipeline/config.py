@@ -91,12 +91,12 @@ class SteeringConfig:
     dataset_path: str = "final_dataset_v3.csv"
     relations_path: str = "schwartz_relations.json"
     train_ratio: float = 0.005       # Per-value stratified split ratio
-    random_seed: int = 50
+    random_seed: int = 10
     use_chat_template: bool = True  # Use tokenizer's chat template for prompts
     # Fallback prompt template if chat template is unavailable or disabled
     prompt_template: str = (
-        "Consider the following question and provide a well-reasoned argument.\n\n"
-        "Question: {question}\n\nArgument:"
+        "Consider the following question and provide an answer.\n\n"
+        "Question: {question}\n\nAnswer:"
     )
 
     # ── Layer Selection ──────────────────────────────────────────────────
@@ -109,11 +109,15 @@ class SteeringConfig:
     layer_sweep_n_samples: int = 10
 
     # ── Optimization ─────────────────────────────────────────────────────
-    lr: float = 0.01
+    lr: float = 0.03
     max_iters: int = 30
     max_norm: Optional[float] = None   # None = unconstrained norm
     # Number of training samples per value for full training (None = all available)
     n_training_samples: Optional[int] = None
+
+    # ── Evaluation ────────────────────────────────────────────────────────
+    # Max validation samples per value for steering evaluation (None = all available)
+    n_eval_samples: Optional[int] = 20
 
     # ── Steering Strength ────────────────────────────────────────────────
     alpha: float = 40.0  # Multiplier on the vector at evaluation/inference time

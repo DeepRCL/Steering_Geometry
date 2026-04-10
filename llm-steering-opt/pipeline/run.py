@@ -76,6 +76,10 @@ def parse_args():
     parser.add_argument("--n_training_samples", type=int, default=None,
                         help="Training samples per value (None = all)")
 
+    # Evaluation
+    parser.add_argument("--n_eval_samples", type=int, default=30,
+                        help="Validation samples per value for steering evaluation (None = all)")
+
     # Steering
     parser.add_argument("--alpha", type=float, default=SteeringConfig.alpha,
                         help="Steering strength multiplier at evaluation time")
@@ -112,6 +116,7 @@ def main():
         max_iters=args.max_iters,
         max_norm=args.max_norm,
         n_training_samples=args.n_training_samples,
+        n_eval_samples=args.n_eval_samples,
         alpha=args.alpha,
         output_dir=args.output_dir,
         save_vectors=not args.no_save_vectors,
