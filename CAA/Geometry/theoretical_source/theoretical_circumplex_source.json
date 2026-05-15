@@ -1,0 +1,193 @@
+{
+  "relations_path": "/home/mahdi.abootorabi/Steering_Geometry/CAA/value_data/schwartz_relations-new.json",
+  "anchor": "canonical_circle_from_schwartz_order",
+  "order": [
+    "Self-direction: thought",
+    "Self-direction: action",
+    "Stimulation",
+    "Hedonism",
+    "Achievement",
+    "Power: dominance",
+    "Power: resources",
+    "Face",
+    "Security: personal",
+    "Security: societal",
+    "Tradition",
+    "Conformity: rules",
+    "Conformity: interpersonal",
+    "Humility",
+    "Benevolence: dependability",
+    "Benevolence: caring",
+    "Universalism: concern",
+    "Universalism: nature",
+    "Universalism: tolerance",
+    "Universalism: objectivity"
+  ],
+  "mds_stress": 11.7931593685638,
+  "procrustes_disparity": 3.4448131756497075e-07,
+  "procrustes_rmse_after_alignment": 0.1511681951234422,
+  "canonical_coordinates": {
+    "Self-direction: thought": {
+      "x": 1.0,
+      "y": 0.0
+    },
+    "Self-direction: action": {
+      "x": 0.9510565162951535,
+      "y": 0.3090169943749474
+    },
+    "Stimulation": {
+      "x": 0.8090169943749475,
+      "y": 0.5877852522924731
+    },
+    "Hedonism": {
+      "x": 0.5877852522924731,
+      "y": 0.8090169943749475
+    },
+    "Achievement": {
+      "x": 0.30901699437494745,
+      "y": 0.9510565162951535
+    },
+    "Power: dominance": {
+      "x": 6.123233995736766e-17,
+      "y": 1.0
+    },
+    "Power: resources": {
+      "x": -0.30901699437494734,
+      "y": 0.9510565162951536
+    },
+    "Face": {
+      "x": -0.587785252292473,
+      "y": 0.8090169943749475
+    },
+    "Security: personal": {
+      "x": -0.8090169943749473,
+      "y": 0.5877852522924732
+    },
+    "Security: societal": {
+      "x": -0.9510565162951535,
+      "y": 0.3090169943749475
+    },
+    "Tradition": {
+      "x": -1.0,
+      "y": 1.2246467991473532e-16
+    },
+    "Conformity: rules": {
+      "x": -0.9510565162951536,
+      "y": -0.3090169943749473
+    },
+    "Conformity: interpersonal": {
+      "x": -0.8090169943749476,
+      "y": -0.587785252292473
+    },
+    "Humility": {
+      "x": -0.5877852522924732,
+      "y": -0.8090169943749473
+    },
+    "Benevolence: dependability": {
+      "x": -0.30901699437494756,
+      "y": -0.9510565162951535
+    },
+    "Benevolence: caring": {
+      "x": -1.8369701987210297e-16,
+      "y": -1.0
+    },
+    "Universalism: concern": {
+      "x": 0.30901699437494723,
+      "y": -0.9510565162951536
+    },
+    "Universalism: nature": {
+      "x": 0.5877852522924729,
+      "y": -0.8090169943749476
+    },
+    "Universalism: tolerance": {
+      "x": 0.8090169943749473,
+      "y": -0.5877852522924734
+    },
+    "Universalism: objectivity": {
+      "x": 0.9510565162951535,
+      "y": -0.3090169943749476
+    }
+  },
+  "theoretical_mds_aligned_coordinates": {
+    "Self-direction: thought": {
+      "x": 0.8489650806905157,
+      "y": -0.00046251670843102836
+    },
+    "Self-direction: action": {
+      "x": 0.8075373404361187,
+      "y": 0.26166553800270775
+    },
+    "Stimulation": {
+      "x": 0.6869771250834343,
+      "y": 0.4984650760137292
+    },
+    "Hedonism": {
+      "x": 0.49904127806877224,
+      "y": 0.6864601656401008
+    },
+    "Achievement": {
+      "x": 0.26216676272201395,
+      "y": 0.8071532919779874
+    },
+    "Power: dominance": {
+      "x": -0.0003667577219376752,
+      "y": 0.8487003222017914
+    },
+    "Power: resources": {
+      "x": -0.26278658552023876,
+      "y": 0.8070822022606802
+    },
+    "Face": {
+      "x": -0.49937457932378126,
+      "y": 0.6864676267452434
+    },
+    "Security: personal": {
+      "x": -0.6870224740913993,
+      "y": 0.49875074080419346
+    },
+    "Security: societal": {
+      "x": -0.8074587971114051,
+      "y": 0.2623286952975148
+    },
+    "Tradition": {
+      "x": -0.848972329619915,
+      "y": 0.00028745619207553945
+    },
+    "Conformity: rules": {
+      "x": -0.8075009389582479,
+      "y": -0.2618325957266026
+    },
+    "Conformity: interpersonal": {
+      "x": -0.6870098860708738,
+      "y": -0.49845124769770954
+    },
+    "Humility": {
+      "x": -0.49928238594299157,
+      "y": -0.6862963346511516
+    },
+    "Benevolence: dependability": {
+      "x": -0.26238062071097046,
+      "y": -0.807079750537395
+    },
+    "Benevolence: caring": {
+      "x": 0.0001724813577708622,
+      "y": -0.8486887121675402
+    },
+    "Universalism: concern": {
+      "x": 0.26330042924774166,
+      "y": -0.8069062067276056
+    },
+    "Universalism: nature": {
+      "x": 0.49963672768601675,
+      "y": -0.6862822115236642
+    },
+    "Universalism: tolerance": {
+      "x": 0.6869485436361014,
+      "y": -0.49886866523688694
+    },
+    "Universalism: objectivity": {
+      "x": 0.8074095861432753,
+      "y": -0.26249287415903716
+    }
+  }
+}

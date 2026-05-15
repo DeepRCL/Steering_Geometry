@@ -1,0 +1,51 @@
+%% Stage 1: Effect of model family and size (all CAA)
+\begin{table*}[ht]
+    \centering
+    \caption{Stage 1: Effect of model family and size on steering-geometry metrics (all using CAA, centered-renorm geometry). For the first four columns, p-values are shown beneath the metric values.}
+    \label{tab:stage1_geometry}
+    \setlength{\tabcolsep}{6pt}
+    \renewcommand{\arraystretch}{1.15}
+    \small
+    \begin{tabular}{ll c c c c c}
+        \toprule
+        \textbf{Model Family} & \textbf{Backbone Model} & \textbf{Spearman $\rho$} & \textbf{Pearson $r$} & \textbf{Circ. Dist. $\rho$} & \textbf{Hier. Dist. $\rho$} & \textbf{Lower$-$Opp. Cos.} \\
+        \midrule
+        Gemma 3 & google/gemma-3-4b-pt & \shortstack{0.2398\\{\scriptsize $p$=8.59e-04}} & \shortstack{0.2545\\{\scriptsize $p$=3.96e-04}} & \shortstack{0.2398\\{\scriptsize $p$=8.59e-04}} & \shortstack{0.1693\\{\scriptsize $p$=1.95e-02}} & 0.2206 \\
+        Gemma 3 & google/gemma-3-12b-pt & \shortstack{0.1611\\{\scriptsize $p$=2.64e-02}} & \shortstack{0.1586\\{\scriptsize $p$=2.88e-02}} & \shortstack{0.1611\\{\scriptsize $p$=2.64e-02}} & \shortstack{0.0818\\{\scriptsize $p$=2.62e-01}} & 0.1483 \\
+        \midrule
+        Qwen 2.5 & Qwen/Qwen2.5-7B & \shortstack{0.2370\\{\scriptsize $p$=9.94e-04}} & \shortstack{0.2491\\{\scriptsize $p$=5.30e-04}} & \shortstack{0.2370\\{\scriptsize $p$=9.94e-04}} & \shortstack{0.1575\\{\scriptsize $p$=3.00e-02}} & 0.2149 \\
+        Qwen 2.5 & Qwen/Qwen2.5-14B & \shortstack{0.3133\\{\scriptsize $p$=1.08e-05}} & \shortstack{0.3298\\{\scriptsize $p$=3.38e-06}} & \shortstack{0.3133\\{\scriptsize $p$=1.08e-05}} & \shortstack{0.2076\\{\scriptsize $p$=4.06e-03}} & 0.2983 \\
+        Qwen 2.5 & Qwen/Qwen2.5-32B & \shortstack{0.3347\\{\scriptsize $p$=2.35e-06}} & \shortstack{0.3470\\{\scriptsize $p$=9.36e-07}} & \shortstack{0.3347\\{\scriptsize $p$=2.35e-06}} & \shortstack{0.2352\\{\scriptsize $p$=1.09e-03}} & 0.2725 \\
+        \midrule
+        Qwen 3.5 & Qwen/Qwen3.5-0.8B-Base & \shortstack{0.2537\\{\scriptsize $p$=4.13e-04}} & \shortstack{0.2643\\{\scriptsize $p$=2.29e-04}} & \shortstack{0.2537\\{\scriptsize $p$=4.13e-04}} & \shortstack{0.1762\\{\scriptsize $p$=1.50e-02}} & 0.1917 \\
+        Qwen 3.5 & Qwen/Qwen3.5-2B-Base & \shortstack{0.3364\\{\scriptsize $p$=2.08e-06}} & \shortstack{0.3545\\{\scriptsize $p$=5.21e-07}} & \shortstack{0.3364\\{\scriptsize $p$=2.08e-06}} & \shortstack{0.2501\\{\scriptsize $p$=5.02e-04}} & 0.2334 \\
+        Qwen 3.5 & Qwen/Qwen3.5-4B-Base & \shortstack{0.4109\\{\scriptsize $p$=3.90e-09}} & \shortstack{0.4243\\{\scriptsize $p$=1.05e-09}} & \shortstack{0.4109\\{\scriptsize $p$=3.90e-09}} & \shortstack{0.3109\\{\scriptsize $p$=1.27e-05}} & 0.3844 \\
+        Qwen 3.5 & Qwen/Qwen3.5-9B-Base & \shortstack{\textbf{0.4606}\\{\scriptsize \textbf{$p$=2.27e-11}}} & \shortstack{\textbf{0.4754}\\{\scriptsize \textbf{$p$=4.18e-12}}} & \shortstack{\textbf{0.4606}\\{\scriptsize \textbf{$p$=2.27e-11}}} & \shortstack{\textbf{0.3408}\\{\scriptsize \textbf{$p$=1.50e-06}}} & \textbf{0.3883} \\
+        \midrule
+        Gemma 4 & google/gemma-4-31B & \shortstack{0.2930\\{\scriptsize $p$=4.08e-05}} & \shortstack{0.3042\\{\scriptsize $p$=1.98e-05}} & \shortstack{0.2930\\{\scriptsize $p$=4.08e-05}} & \shortstack{0.2182\\{\scriptsize $p$=2.49e-03}} & 0.2717 \\
+        \bottomrule
+    \end{tabular}
+\end{table*}
+
+%% Stage 2: Effect of steering method (fixed model)
+\begin{table*}[ht]
+    \centering
+    \caption{Stage 2: Effect of steering method on steering-geometry metrics for matched Qwen 3.5 backbones. For the first four columns, p-values are shown beneath the metric values.}
+    \label{tab:stage2_geometry}
+    \setlength{\tabcolsep}{6pt}
+    \renewcommand{\arraystretch}{1.15}
+    \small
+    \begin{tabular}{ll c c c c c}
+        \toprule
+        \textbf{Backbone Model} & \textbf{Method} & \textbf{Spearman $\rho$} & \textbf{Pearson $r$} & \textbf{Circ. Dist. $\rho$} & \textbf{Hier. Dist. $\rho$} & \textbf{Lower$-$Opp. Cos.} \\
+        \midrule
+        Qwen/Qwen3.5-9B-Base & OPT & \shortstack{-0.0049\\{\scriptsize $p$=9.46e-01}} & \shortstack{-0.0167\\{\scriptsize $p$=8.19e-01}} & \shortstack{-0.0049\\{\scriptsize $p$=9.46e-01}} & \shortstack{0.1180\\{\scriptsize $p$=1.05e-01}} & -0.0109 \\
+        Qwen/Qwen3.5-9B-Base & CAA & \shortstack{\textbf{0.4606}\\{\scriptsize \textbf{$p$=2.27e-11}}} & \shortstack{\textbf{0.4754}\\{\scriptsize \textbf{$p$=4.18e-12}}} & \shortstack{\textbf{0.4606}\\{\scriptsize \textbf{$p$=2.27e-11}}} & \shortstack{0.3408\\{\scriptsize $p$=1.50e-06}} & 0.3883 \\
+        Qwen/Qwen3.5-9B-Base & SparseCAA & \shortstack{0.4584\\{\scriptsize $p$=2.92e-11}} & \shortstack{0.4520\\{\scriptsize $p$=5.91e-11}} & \shortstack{0.4584\\{\scriptsize $p$=2.92e-11}} & \shortstack{\textbf{0.4392}\\{\scriptsize \textbf{$p$=2.32e-10}}} & \textbf{0.4215} \\
+        \midrule
+        Qwen/Qwen3.5-9B & OPT & \shortstack{0.0615\\{\scriptsize $p$=3.99e-01}} & \shortstack{0.0552\\{\scriptsize $p$=4.49e-01}} & \shortstack{0.0615\\{\scriptsize $p$=3.99e-01}} & \shortstack{-0.0177\\{\scriptsize $p$=8.08e-01}} & -0.0099 \\
+        Qwen/Qwen3.5-9B & CAA & \shortstack{0.1577\\{\scriptsize $p$=2.98e-02}} & \shortstack{0.1754\\{\scriptsize $p$=1.55e-02}} & \shortstack{0.1577\\{\scriptsize $p$=2.98e-02}} & \shortstack{0.0651\\{\scriptsize $p$=3.72e-01}} & \textbf{0.2408} \\
+        Qwen/Qwen3.5-9B & SparseCAA & \shortstack{\textbf{0.2625}\\{\scriptsize \textbf{$p$=2.53e-04}}} & \shortstack{\textbf{0.2627}\\{\scriptsize \textbf{$p$=2.51e-04}}} & \shortstack{\textbf{0.2625}\\{\scriptsize \textbf{$p$=2.53e-04}}} & \shortstack{\textbf{0.2251}\\{\scriptsize \textbf{$p$=1.80e-03}}} & 0.1747 \\
+        \bottomrule
+    \end{tabular}
+\end{table*}
