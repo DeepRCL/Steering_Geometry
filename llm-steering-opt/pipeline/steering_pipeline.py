@@ -85,7 +85,7 @@ class SteeringPipeline:
 
         self.model = AutoModelForCausalLM.from_pretrained(
             self.config.model_name,
-            torch_dtype=self.config.get_dtype(),
+            dtype=self.config.get_dtype(),
             trust_remote_code=True
         ).to(self.config.device)
 
@@ -304,7 +304,7 @@ class SteeringPipeline:
         """
         self._log(f"Training steering vectors at layer {layer}")
         self._log(f"  lr={self.config.lr}, max_iters={self.config.max_iters}, "
-                   f"max_norm={self.config.max_norm}, alpha={self.config.alpha}")
+                   f"max_norm={self.config.max_norm}, alpha={self.config.alpha}, train_ratio={self.config.train_ratio}")
         self._log("")
 
         vectors: Dict[str, torch.Tensor] = {}
@@ -470,7 +470,7 @@ class SteeringPipeline:
 
             self._log(f"  Evaluating {value} ({len(val_rows)} samples) ...")
 
-            pbar = tqdm(val_rows, desc="Eval steering", leave=True)
+            pbar = tqdm(val_rows, desc="Eval steering", position=0, leave=True)
             for row in pbar:
                 pbar.set_description(f"Eval: {value}")
                 prompt = data_utils.format_prompt(
@@ -692,27 +692,31 @@ class SteeringPipeline:
     @staticmethod
     def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
         """Scatter plot of a 2-D embedding, coloured by Schwartz higher-order group."""
-        plt.figure(figsize=(10, 8))
+        plt.figure(figsize=(14, 11))
         for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
             group = value_to_group(val)
             color = GROUP_COLORS.get(group, "black")
-            plt.scatter(coords[i, 0], coords[i, 1], c=color, s=100)
+            plt.scatter(coords[i, 0], coords[i, 1], c=color, s=150, edgecolors="white", linewidths=1.2)
             plt.annotate(
                 val.split(":")[-1].strip(),
                 (coords[i, 0], coords[i, 1]),
-                xytext=(5, 5),
+                xytext=(7, 7),
                 textcoords="offset points",
-                fontsize=9,
+                fontsize=13,
+                fontweight="semibold",
+                bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.75),
             )
 
         from matplotlib.lines import Line2D
         legend_els = [
             Line2D([0], [0], marker="o", color="w", markerfacecolor=c,
-                   markersize=10, label=g)
+                   markersize=12, label=g)
             for g, c in GROUP_COLORS.items()
         ]
-        plt.legend(handles=legend_els, loc="best")
-        plt.title(title)
+        plt.legend(handles=legend_els, loc="best", fontsize=13)
+        plt.title(title, fontsize=18)
+        plt.xticks(fontsize=12)
+        plt.yticks(fontsize=12)
         plt.tight_layout()
         plt.savefig(out_path, dpi=300)
         plt.close()
@@ -799,48 +803,43 @@ class SteeringPipeline:
         )
 
         # ── 4. Heatmaps ──────────────────────────────────────────────
-        short_labels = [
-            v.split(":")[-1].strip() if ":" in v else v
-            for v in SCHWARTZ_CIRCUMPLEX_ORDER
-        ]
 
         # 4a. Original empirical heatmap (fixed range [-1, 1])
-        plt.figure(figsize=(12, 10))
+        plt.figure(figsize=(14, 12))
         sns.heatmap(
             empirical_sim,
-            xticklabels=short_labels,
-            yticklabels=short_labels,
+            xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             cmap="coolwarm", vmin=-1, vmax=1,
-            annot=True, fmt=".2f", annot_kws={"size": 7},
         )
-        plt.title("Empirical Cosine Similarities (fixed scale)")
+        plt.title("Empirical Cosine Similarities", fontsize=18)
+        plt.xticks(fontsize=10, rotation=45, ha="right")
+        plt.yticks(fontsize=10)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap.png"), dpi=300)
         plt.close()
 
-        # 4b. Contrast-enhanced: mask diagonal, auto-scale to off-diagonal range
+        # 4b. Contrast-enhanced: auto-scale to off-diagonal range
         off_diag_mask = ~np.eye(num_values, dtype=bool)
         off_diag_vals = empirical_sim[off_diag_mask]
         vmin_auto = off_diag_vals.min()
         vmax_auto = off_diag_vals.max()
 
-        diag_masked = empirical_sim.copy()
-        np.fill_diagonal(diag_masked, np.nan)
-
-        plt.figure(figsize=(12, 10))
+        plt.figure(figsize=(14, 12))
         sns.heatmap(
-            diag_masked,
-            xticklabels=short_labels,
-            yticklabels=short_labels,
+            empirical_sim,
+            xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             cmap="coolwarm",
             vmin=vmin_auto, vmax=vmax_auto,
-            annot=True, fmt=".3f", annot_kws={"size": 7},
-            mask=np.eye(num_values, dtype=bool),
         )
         plt.title(
             f"Empirical Cosine Similarities (contrast-enhanced)\n"
-            f"color range: [{vmin_auto:.3f}, {vmax_auto:.3f}]"
+            f"color range: [{vmin_auto:.3f}, {vmax_auto:.3f}]",
+            fontsize=18,
         )
+        plt.xticks(fontsize=10, rotation=45, ha="right")
+        plt.yticks(fontsize=10)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_enhanced.png"), dpi=300)
         plt.close()
@@ -849,30 +848,33 @@ class SteeringPipeline:
         rank_matrix = np.zeros_like(empirical_sim)
         rank_vals = rankdata(off_diag_vals)  # rank the off-diagonal values
         rank_matrix[off_diag_mask] = rank_vals / rank_vals.max()  # normalize to [0,1]
-        np.fill_diagonal(rank_matrix, np.nan)
+        np.fill_diagonal(rank_matrix, 1.0)  # diagonal = max similarity
 
-        plt.figure(figsize=(12, 10))
+        plt.figure(figsize=(14, 12))
         sns.heatmap(
             rank_matrix,
-            xticklabels=short_labels,
-            yticklabels=short_labels,
+            xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+            yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             cmap="coolwarm",
             vmin=0, vmax=1,
-            mask=np.eye(num_values, dtype=bool),
         )
-        plt.title("Empirical Similarity (rank-transformed, 0=least similar, 1=most)")
+        plt.title("Empirical Similarity (rank-transformed, 0=least similar, 1=most)", fontsize=18)
+        plt.xticks(fontsize=10, rotation=45, ha="right")
+        plt.yticks(fontsize=10)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_ranked.png"), dpi=300)
         plt.close()
 
-        plt.figure(figsize=(12, 10))
+        plt.figure(figsize=(14, 12))
         sns.heatmap(
             theoretical_sim,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             cmap="coolwarm", vmin=-1, vmax=1,
         )
-        plt.title("Theoretical Relationships")
+        plt.title("Theoretical Relationships", fontsize=18)
+        plt.xticks(fontsize=10, rotation=45, ha="right")
+        plt.yticks(fontsize=10)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "theoretical_similarity_heatmap.png"), dpi=300)
         plt.close()
@@ -1035,34 +1037,43 @@ class SteeringPipeline:
             json.dump(geometry_metrics, f, indent=2)
 
         # ── 8. MDS circumplex overlay plot ────────────────────────────
-        plt.figure(figsize=(12, 12))
+        plt.figure(figsize=(15, 15))
         circle_patch = plt.Circle((0, 0), 1, color="lightgray",
                                   fill=False, linestyle="--")
         plt.gca().add_patch(circle_patch)
 
         for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
             tx, ty = X_circle[i]
-            plt.plot(tx, ty, "x", color="gray", markersize=8)
+            plt.plot(tx, ty, "x", color="gray", markersize=9)
 
             ex, ey = X_mds_aligned[i]
             group = value_to_group(val)
             color = GROUP_COLORS.get(group, "black")
 
-            plt.plot(ex, ey, "o", color=color, markersize=8)
+            plt.plot(ex, ey, "o", color=color, markersize=10, markeredgecolor="white", markeredgewidth=1.0)
             plt.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
 
             label = val.split(":")[-1].strip()
-            plt.annotate(label, (ex, ey), xytext=(5, 5),
-                         textcoords="offset points", fontsize=9, color=color)
+            plt.annotate(
+                label,
+                (ex, ey),
+                xytext=(8, 8),
+                textcoords="offset points",
+                fontsize=13,
+                fontweight="semibold",
+                color=color,
+                bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
+            )
 
-        plt.title("2D MDS Aligned to Theoretical Circumplex")
-        ax = plt.gca()
-        ax.set_aspect("equal", adjustable="datalim")
+        plt.title("2D MDS Aligned to Theoretical Circumplex", fontsize=18)
+        plt.axis("equal")
         scale = np.max(np.abs(X_mds_aligned))
         lim = max(1.2, scale * 1.2)
-        ax.set_xlim(-lim, lim)
-        ax.set_ylim(-lim, lim)
+        plt.xlim(-lim, lim)
+        plt.ylim(-lim, lim)
         plt.grid(alpha=0.2)
+        plt.xticks(fontsize=12)
+        plt.yticks(fontsize=12)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "mds_circumplex.png"), dpi=300)
         plt.close()
@@ -1111,7 +1122,7 @@ class SteeringPipeline:
 
         Directory layout::
 
-            {output_dir}/{model_name}/lr_{lr}-alpha_{alpha}-layer_{layer}/vectors/
+            {output_dir}/{model_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}/vectors/
                 manifest.json
                 {value_name}.pt
                 {value_name}.json
@@ -1224,6 +1235,18 @@ class SteeringPipeline:
         Returns:
             (vectors, metrics, best_layer)
         """
+
+        if torch.cuda.is_available():
+            self._log(f"Total GPUs: {torch.cuda.device_count()}")
+            for i in range(torch.cuda.device_count()):
+                props = torch.cuda.get_device_properties(i)
+                self._log(f"\n--- GPU {i}: {props.name} ---")
+                self._log(f"  Compute Capability: {props.major}.{props.minor}")
+                self._log(f"  Total Memory: {round(props.total_memory / 1024**3, 2)} GB")
+                self._log(f"  Multi-processors: {props.multi_processor_count}")
+        else:
+            self._log("No CUDA-capable GPUs detected.")
+
         self._log("=" * 60)
         self._log("  Value-Steering Optimization Pipeline")
         self._log("=" * 60)
@@ -1289,22 +1312,26 @@ class SteeringPipeline:
 
     def _log(self, msg: str):
         if self.config.verbose:
-            print(msg)
+            print(msg,flush=True)
 
     def _run_dir_name(self, layer: int) -> str:
         """
         Hierarchical run directory::
 
-            {model_short_name}/lr_{lr}-alpha_{alpha}-layer_{layer}
+            {model_short_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}
 
         Example::
 
-            Qwen3.5-9B-Base/lr_0p01-alpha_40p0-layer_22
+            Qwen3.5-9B-Base/lr_0p01-alpha_40p0-layer_22-max_iter_30-train_ratio_0p005
         """
         model_short = self.config.model_name.split("/")[-1].replace(" ", "_")
         lr_slug = str(self.config.lr).replace(".", "p").replace("-", "neg")
         alpha_slug = str(self.config.alpha).replace(".", "p").replace("-", "neg")
-        run_name = f"lr_{lr_slug}-alpha_{alpha_slug}-layer_{layer}"
+        run_name = (
+            f"lr_{lr_slug}-alpha_{alpha_slug}-layer_{layer}-"
+            f"max_iter_{self.config.max_iters}-"
+            f"train_ratio_{str(self.config.train_ratio).replace('.', 'p')}"
+        )
         return os.path.join(model_short, run_name)
 
     @staticmethod
