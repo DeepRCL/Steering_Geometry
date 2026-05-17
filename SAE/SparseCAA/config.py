@@ -98,7 +98,7 @@ class SparseCAAPipelineConfig:
     seed: int = 42
 
     # ── Model ────────────────────────────────────────────────────────────────
-    model_name: str = "Qwen/Qwen3.5-9B"
+    model_name: str = "Qwen/Qwen3.5-9B-Base"
     device: str = "auto"
 
     # ── SAE ──────────────────────────────────────────────────────────────────
