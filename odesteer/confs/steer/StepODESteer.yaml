@@ -1,0 +1,9 @@
+type: StepODESteer
+kwargs:
+  n_components: 8000
+  degree: 2 
+  gamma: 0.1
+  coef0: 1.0
+  lin_clf_type: lr
+T: 1.0
+name: ${steer.type}-nc${steer.kwargs.n_components}-degree${steer.kwargs.degree}-gamma${steer.kwargs.gamma}-coef0${steer.kwargs.coef0}-${steer.kwargs.lin_clf_type}-T${steer.T}

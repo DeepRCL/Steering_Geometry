@@ -1,0 +1,4 @@
+type: CAA
+kwargs: {}
+T: 1.0
+name: ${steer.type}-T${steer.T}

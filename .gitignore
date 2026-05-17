@@ -1,20 +1,29 @@
-**/__pycache__/*
+# Environments / IDEs
 .env
+.vscode/
+.cursor/
+
+# Python / Models
+**/__pycache__/
+*.pt
+
+# Logs / Outputs
 *.slurm
-logs/*
-.vscode/*
-dataset_construction/data/*
-dataset_construction/Touche23-ValueEval/data/*
-dataset_construction/value_bench/data/*
-.cursor/*
 *.out
 *.err
-dataset_construction/Touche23-ValueEval/data/
-CAA/Geometry/outputs/*
-SAE/outputs/*
-*.pt
-SAE/sae_models/*
+*.log
+**/logs/
+**/results/
+
+# Data
 *.csv
-llm-steering-opt/steering_results/*
-SAE/SparseCAA/outputs/*
-**/logs/*
+dataset_construction/data/
+dataset_construction/Touche23-ValueEval/data/
+dataset_construction/value_bench/data/
+
+# Experiment outputs / Checkpoints
+CAA/Geometry/outputs/
+SAE/outputs/
+SAE/sae_models/
+SAE/SparseCAA/outputs/
+llm-steering-opt/steering_results/
