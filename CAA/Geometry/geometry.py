@@ -12,6 +12,8 @@ from sklearn.metrics import silhouette_score
 import umap
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.lines import Line2D
+from matplotlib.patches import Circle, Wedge
 from typing import Dict
 
 from .config import PipelineConfig, SCHWARTZ_CIRCUMPLEX_ORDER, HIGHER_ORDER_GROUPS, value_to_group, GROUP_COLORS, safe_name
@@ -20,6 +22,69 @@ PLOT_LABEL_FONTSIZE = 13
 PLOT_TITLE_FONTSIZE = 18
 PLOT_LEGEND_FONTSIZE = 13
 PLOT_MARKER_SIZE = 150
+BOUNDARY_GROUPS = {
+    "Hedonism": ("Openness to Change", "Self-Enhancement"),
+    "Face": ("Self-Enhancement", "Conservation"),
+    "Humility": ("Conservation", "Self-Transcendence"),
+}
+
+
+def _short_value_label(value: str) -> str:
+    return value.split(":")[-1].strip()
+
+
+def _group_legend_handles():
+    return [
+        Line2D(
+            [0],
+            [0],
+            marker="o",
+            color="w",
+            markerfacecolor=GROUP_COLORS[group_name],
+            markeredgecolor="white",
+            markersize=11,
+            linewidth=0,
+            label=group_name,
+        )
+        for group_name in HIGHER_ORDER_GROUPS
+    ]
+
+
+def _add_group_legend(ax) -> None:
+    legend = ax.legend(
+        handles=_group_legend_handles(),
+        loc="upper right",
+        frameon=True,
+        framealpha=0.94,
+        facecolor="white",
+        edgecolor="lightgray",
+        fontsize=12,
+        borderpad=0.5,
+        labelspacing=0.45,
+        handletextpad=0.6,
+    )
+    ax.add_artist(legend)
+
+
+def _draw_value_marker(ax, x: float, y: float, value: str, radius: float = 0.055) -> None:
+    if value in BOUNDARY_GROUPS:
+        left_group, right_group = BOUNDARY_GROUPS[value]
+        ax.add_patch(Wedge((x, y), radius, 90, 270, facecolor=GROUP_COLORS[left_group], edgecolor="none", zorder=3))
+        ax.add_patch(Wedge((x, y), radius, -90, 90, facecolor=GROUP_COLORS[right_group], edgecolor="none", zorder=3))
+        ax.add_patch(Circle((x, y), radius, facecolor="none", edgecolor="white", linewidth=1.2, zorder=4))
+        ax.add_patch(Circle((x, y), radius, facecolor="none", edgecolor="black", linewidth=0.3, alpha=0.35, zorder=4))
+        return
+
+    ax.add_patch(
+        Circle(
+            (x, y),
+            radius,
+            facecolor=GROUP_COLORS.get(value_to_group(value), "black"),
+            edgecolor="white",
+            linewidth=1.2,
+            zorder=3,
+        )
+    )
 
 
 def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
@@ -29,21 +94,17 @@ def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
         color = GROUP_COLORS.get(group, "black")
         plt.scatter(coords[i, 0], coords[i, 1], c=color, s=PLOT_MARKER_SIZE, edgecolors="white", linewidths=1.2)
         plt.annotate(
-            val.split(":")[-1].strip(),
+            _short_value_label(val),
             (coords[i, 0], coords[i, 1]),
             xytext=(7, 7),
             textcoords="offset points",
             fontsize=PLOT_LABEL_FONTSIZE,
             fontweight="semibold",
+            color=color,
             bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.75),
         )
 
-    from matplotlib.lines import Line2D
-    legend_els = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=c, markersize=12, label=g)
-        for g, c in GROUP_COLORS.items()
-    ]
-    plt.legend(handles=legend_els, loc="best", fontsize=PLOT_LEGEND_FONTSIZE)
+    plt.legend(handles=_group_legend_handles(), loc="best", fontsize=PLOT_LEGEND_FONTSIZE)
     plt.title(title, fontsize=PLOT_TITLE_FONTSIZE)
     plt.xticks(fontsize=12)
     plt.yticks(fontsize=12)
@@ -327,39 +388,39 @@ def analyze_geometry(config: PipelineConfig, vectors: Dict[str, torch.Tensor]):
         json.dump(geometry_metrics, f, indent=2)
     
     plt.figure(figsize=(15, 15))
-    # Draw theoretical circle
-    circle = plt.Circle((0, 0), 1, color='lightgray', fill=False, linestyle='--')
-    plt.gca().add_patch(circle)
-    
+    ax = plt.gca()
+    ax.add_patch(Circle((0, 0), 1, color="lightgray", fill=False, linestyle="--"))
+
     for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
         # Theoretical pos
         tx, ty = X_circle[i]
-        plt.plot(tx, ty, 'x', color='gray', markersize=9)
-        
+        ax.plot(tx, ty, "x", color="gray", markersize=9)
+
         # Empirical pos
         ex, ey = X_mds_aligned[i]
         group = value_to_group(val)
         color = GROUP_COLORS.get(group, "black")
-        
-        plt.plot(ex, ey, 'o', color=color, markersize=10, markeredgecolor='white', markeredgewidth=1.0)
-        
+
+        _draw_value_marker(ax, ex, ey, val)
+
         # Draw line connecting theoretical to empirical
-        plt.plot([tx, ex], [ty, ey], color='gray', alpha=0.3, linestyle=':')
-        
-        label = val.split(':')[-1].strip()
-        plt.annotate(
+        ax.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
+
+        label = _short_value_label(val)
+        ax.annotate(
             label,
             (ex, ey),
             xytext=(8, 8),
-            textcoords='offset points',
+            textcoords="offset points",
             fontsize=PLOT_LABEL_FONTSIZE,
             fontweight="semibold",
             color=color,
             bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
         )
-        
-    plt.title('2D MDS Aligned to Theoretical Circumplex', fontsize=PLOT_TITLE_FONTSIZE)
-    plt.axis('equal')
+
+    _add_group_legend(ax)
+    plt.title("2D MDS Aligned to Theoretical Circumplex", fontsize=PLOT_TITLE_FONTSIZE)
+    plt.axis("equal")
     # Set limits clearly showing unit circle
     scale = np.max(np.abs(X_mds_aligned))
     lim = max(1.2, scale * 1.2)

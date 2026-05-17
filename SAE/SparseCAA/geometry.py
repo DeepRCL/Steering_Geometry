@@ -29,6 +29,7 @@ import torch
 import torch.nn.functional as F
 import umap
 from matplotlib.lines import Line2D
+from matplotlib.patches import Circle, Wedge
 from scipy.linalg import orthogonal_procrustes
 from scipy.spatial import procrustes
 from scipy.stats import pearsonr, spearmanr
@@ -48,6 +49,11 @@ PLOT_LABEL_FONTSIZE = 13
 PLOT_TITLE_FONTSIZE = 18
 PLOT_LEGEND_FONTSIZE = 13
 PLOT_MARKER_SIZE = 150
+BOUNDARY_GROUPS = {
+    "Hedonism": ("Openness to Change", "Self-Enhancement"),
+    "Face": ("Self-Enhancement", "Conservation"),
+    "Humility": ("Conservation", "Self-Transcendence"),
+}
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -62,10 +68,13 @@ def _legend_handles() -> list:
         Line2D(
             [0], [0],
             marker="o", color="w",
-            markerfacecolor=c, markersize=12,
+            markerfacecolor=GROUP_COLORS[g],
+            markeredgecolor="white",
+            markersize=11,
+            linewidth=0,
             label=g,
         )
-        for g, c in GROUP_COLORS.items()
+        for g in HIGHER_ORDER_GROUPS
     ]
 
 
@@ -76,6 +85,43 @@ def _unit_vecs(vectors: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
         n = v.norm()
         result[val] = v / n if n > 0 else v
     return result
+
+
+def _add_group_legend(ax) -> None:
+    legend = ax.legend(
+        handles=_legend_handles(),
+        loc="upper right",
+        frameon=True,
+        framealpha=0.94,
+        facecolor="white",
+        edgecolor="lightgray",
+        fontsize=12,
+        borderpad=0.5,
+        labelspacing=0.45,
+        handletextpad=0.6,
+    )
+    ax.add_artist(legend)
+
+
+def _draw_value_marker(ax, x: float, y: float, value: str, radius: float = 0.055) -> None:
+    if value in BOUNDARY_GROUPS:
+        left_group, right_group = BOUNDARY_GROUPS[value]
+        ax.add_patch(Wedge((x, y), radius, 90, 270, facecolor=GROUP_COLORS[left_group], edgecolor="none", zorder=3))
+        ax.add_patch(Wedge((x, y), radius, -90, 90, facecolor=GROUP_COLORS[right_group], edgecolor="none", zorder=3))
+        ax.add_patch(Circle((x, y), radius, facecolor="none", edgecolor="white", linewidth=1.2, zorder=4))
+        ax.add_patch(Circle((x, y), radius, facecolor="none", edgecolor="black", linewidth=0.3, alpha=0.35, zorder=4))
+        return
+
+    ax.add_patch(
+        Circle(
+            (x, y),
+            radius,
+            facecolor=GROUP_COLORS.get(value_to_group(value), "black"),
+            edgecolor="white",
+            linewidth=1.2,
+            zorder=3,
+        )
+    )
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -238,7 +284,7 @@ def _plot_mds(emp_sim: np.ndarray, title: str, path: str, seed: int) -> None:
     X_aligned = X_mds @ R
 
     fig, ax = plt.subplots(figsize=(15, 15))
-    ax.add_patch(plt.Circle((0, 0), 1, color="lightgray", fill=False, linestyle="--"))
+    ax.add_patch(Circle((0, 0), 1, color="lightgray", fill=False, linestyle="--"))
 
     for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
         tx, ty = X_circle[i]
@@ -246,7 +292,7 @@ def _plot_mds(emp_sim: np.ndarray, title: str, path: str, seed: int) -> None:
         color = GROUP_COLORS.get(value_to_group(val), "black")
 
         ax.plot(tx, ty, "x", color="gray", markersize=9)
-        ax.plot(ex, ey, "o", color=color, markersize=10, markeredgecolor="white", markeredgewidth=1.0)
+        _draw_value_marker(ax, ex, ey, val)
         ax.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
         ax.annotate(
             _short(val),
@@ -259,8 +305,8 @@ def _plot_mds(emp_sim: np.ndarray, title: str, path: str, seed: int) -> None:
             bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
         )
 
-    ax.legend(handles=_legend_handles(), fontsize=PLOT_LEGEND_FONTSIZE)
-    ax.set_title(f"{title}\n(grey ×: Schwartz theory,  coloured ●: empirical)", fontsize=PLOT_TITLE_FONTSIZE)
+    _add_group_legend(ax)
+    ax.set_title(title, fontsize=PLOT_TITLE_FONTSIZE)
     ax.set_aspect("equal")
     lim = max(np.abs(X_aligned).max(), 1.0) * 1.25
     ax.set_xlim(-lim, lim)

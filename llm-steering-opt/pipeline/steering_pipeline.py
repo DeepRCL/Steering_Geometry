@@ -30,6 +30,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
+from matplotlib.lines import Line2D
+from matplotlib.patches import Circle, Wedge
 from tqdm import tqdm
 
 # Ensure steering_opt is importable
@@ -44,6 +46,12 @@ from .config import (
     value_to_group,
 )
 from . import data_utils
+
+BOUNDARY_GROUPS = {
+    "Hedonism": ("Openness to Change", "Self-Enhancement"),
+    "Face": ("Self-Enhancement", "Conservation"),
+    "Humility": ("Conservation", "Self-Transcendence"),
+}
 
 
 class SteeringPipeline:
@@ -690,6 +698,60 @@ class SteeringPipeline:
         return 5, "no_relation"
 
     @staticmethod
+    def _group_legend_handles():
+        return [
+            Line2D(
+                [0],
+                [0],
+                marker="o",
+                color="w",
+                markerfacecolor=GROUP_COLORS[group_name],
+                markeredgecolor="white",
+                markersize=11,
+                linewidth=0,
+                label=group_name,
+            )
+            for group_name in HIGHER_ORDER_GROUPS
+        ]
+
+    @classmethod
+    def _add_group_legend(cls, ax) -> None:
+        legend = ax.legend(
+            handles=cls._group_legend_handles(),
+            loc="upper right",
+            frameon=True,
+            framealpha=0.94,
+            facecolor="white",
+            edgecolor="lightgray",
+            fontsize=12,
+            borderpad=0.5,
+            labelspacing=0.45,
+            handletextpad=0.6,
+        )
+        ax.add_artist(legend)
+
+    @staticmethod
+    def _draw_value_marker(ax, x: float, y: float, value: str, radius: float = 0.055) -> None:
+        if value in BOUNDARY_GROUPS:
+            left_group, right_group = BOUNDARY_GROUPS[value]
+            ax.add_patch(Wedge((x, y), radius, 90, 270, facecolor=GROUP_COLORS[left_group], edgecolor="none", zorder=3))
+            ax.add_patch(Wedge((x, y), radius, -90, 90, facecolor=GROUP_COLORS[right_group], edgecolor="none", zorder=3))
+            ax.add_patch(Circle((x, y), radius, facecolor="none", edgecolor="white", linewidth=1.2, zorder=4))
+            ax.add_patch(Circle((x, y), radius, facecolor="none", edgecolor="black", linewidth=0.3, alpha=0.35, zorder=4))
+            return
+
+        ax.add_patch(
+            Circle(
+                (x, y),
+                radius,
+                facecolor=GROUP_COLORS.get(value_to_group(value), "black"),
+                edgecolor="white",
+                linewidth=1.2,
+                zorder=3,
+            )
+        )
+
+    @staticmethod
     def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
         """Scatter plot of a 2-D embedding, coloured by Schwartz higher-order group."""
         plt.figure(figsize=(14, 11))
@@ -704,16 +766,11 @@ class SteeringPipeline:
                 textcoords="offset points",
                 fontsize=13,
                 fontweight="semibold",
+                color=color,
                 bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.75),
             )
 
-        from matplotlib.lines import Line2D
-        legend_els = [
-            Line2D([0], [0], marker="o", color="w", markerfacecolor=c,
-                   markersize=12, label=g)
-            for g, c in GROUP_COLORS.items()
-        ]
-        plt.legend(handles=legend_els, loc="best", fontsize=13)
+        plt.legend(handles=SteeringPipeline._group_legend_handles(), loc="best", fontsize=13)
         plt.title(title, fontsize=18)
         plt.xticks(fontsize=12)
         plt.yticks(fontsize=12)
@@ -1038,23 +1095,22 @@ class SteeringPipeline:
 
         # ── 8. MDS circumplex overlay plot ────────────────────────────
         plt.figure(figsize=(15, 15))
-        circle_patch = plt.Circle((0, 0), 1, color="lightgray",
-                                  fill=False, linestyle="--")
-        plt.gca().add_patch(circle_patch)
+        ax = plt.gca()
+        ax.add_patch(Circle((0, 0), 1, color="lightgray", fill=False, linestyle="--"))
 
         for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
             tx, ty = X_circle[i]
-            plt.plot(tx, ty, "x", color="gray", markersize=9)
+            ax.plot(tx, ty, "x", color="gray", markersize=9)
 
             ex, ey = X_mds_aligned[i]
             group = value_to_group(val)
             color = GROUP_COLORS.get(group, "black")
 
-            plt.plot(ex, ey, "o", color=color, markersize=10, markeredgecolor="white", markeredgewidth=1.0)
-            plt.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
+            self._draw_value_marker(ax, ex, ey, val)
+            ax.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
 
             label = val.split(":")[-1].strip()
-            plt.annotate(
+            ax.annotate(
                 label,
                 (ex, ey),
                 xytext=(8, 8),
@@ -1065,6 +1121,7 @@ class SteeringPipeline:
                 bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
             )
 
+        self._add_group_legend(ax)
         plt.title("2D MDS Aligned to Theoretical Circumplex", fontsize=18)
         plt.axis("equal")
         scale = np.max(np.abs(X_mds_aligned))
