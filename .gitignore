@@ -18,3 +18,5 @@ SAE/sae_models/*
 llm-steering-opt/steering_results/*
 SAE/SparseCAA/outputs/*
 **/logs/*
+**.log
+**/results/*

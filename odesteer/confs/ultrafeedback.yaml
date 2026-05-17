@@ -1,0 +1,16 @@
+defaults:
+  - _self_
+  - steer: NoSteer
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+model: Llama3.1-8B-Base
+dataset: ultrafeedback
+layer_idx: 13
+batch_size: 10
+seed: 42
+
+hydra:
+  run:
+    dir: .
+  output_subdir: null
