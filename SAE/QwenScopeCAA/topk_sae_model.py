@@ -49,15 +49,41 @@ class TopKSparseAutoencoder(nn.Module):
         self.encoder = nn.Linear(d_in, d_sae)
         self.decoder = nn.Linear(d_sae, d_in)
 
+    # ── Pre-activation (dense) ────────────────────────────────────────────────
+    def pre_encode(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Return the DENSE pre-TopK encoder activations: x @ W_enc.T + b_enc.
+
+        This is the continuous representation BEFORE sparsification.  Use this
+        for persona vector computation and for steering injection — it avoids
+        the two failure modes of post-TopK vectors:
+          1. ~99.9% of entries are exactly zero (only 50/65536 per sample),
+             making cosine similarity between persona vectors dominated by
+             "common" features rather than value-discriminative ones.
+          2. TopK can keep negative pre-activations, which carry the wrong
+             semantics (feature presence vs. absence) in the difference vector.
+
+        Args:
+            x : (..., d_in)
+        Returns:
+            pre : (..., d_sae) — dense, continuous, can be negative
+        """
+        return self.encoder(x)                         # x @ W_enc.T + b_enc
+
     # ── Encode ────────────────────────────────────────────────────────────────
     def encode(self, x: torch.Tensor) -> torch.Tensor:
         """
+        Standard TopK encode: exactly k non-zero values per token.
+
+        Use this for reconstruction and when you need the SAE's native sparse
+        representation.  For persona vectors and steering, prefer pre_encode().
+
         Args:
             x : (..., d_in)
         Returns:
             z : (..., d_sae) — exactly k non-zero values per token
         """
-        pre = self.encoder(x)                          # (..., d_sae)
+        pre = self.pre_encode(x)                       # (..., d_sae)
         topk_vals, topk_idx = pre.topk(self.k, dim=-1)
         z = torch.zeros_like(pre)
         z.scatter_(-1, topk_idx, topk_vals)

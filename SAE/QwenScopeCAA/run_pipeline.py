@@ -117,6 +117,15 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Cap all values at the minimum per-value count for strict balance",
     )
+    p.add_argument(
+        "--no_pre_topk_personas",
+        action="store_true",
+        help=(
+            "Use legacy post-TopK sparse persona vectors instead of the default\n"
+            "pre-TopK dense mode.  Not recommended: post-TopK vectors are 99.9%%\n"
+            "zeros and include negative activations, hurting geometry."
+        ),
+    )
     p.add_argument("--eval_split", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=42)
 
@@ -210,6 +219,7 @@ def main() -> None:
         touche_dataset_path=args.touche_dataset_path,
         touche_samples_per_value=args.touche_samples_per_value,
         equal_samples_per_value=args.equal_samples_per_value,
+        use_pre_topk_personas=not args.no_pre_topk_personas,
         eval_split=args.eval_split,
         seed=args.seed,
         model_name=args.model_name,
@@ -238,9 +248,10 @@ def main() -> None:
     os.makedirs(config.run_dir, exist_ok=True)
     config.save()
     print(f"Config saved → {config.run_dir}/pipeline_config.json")
-    print(f"SAE repo    : {config.sae_repo}")
-    print(f"Layer       : {config.layer}  |  k={config.k}  |  d_in={config.d_in}  |  d_sae={config.d_sae}")
-    print(f"Fine-tuning : {'disabled (--skip_finetune)' if args.skip_finetune else 'enabled'}")
+    print(f"SAE repo     : {config.sae_repo}")
+    print(f"Layer        : {config.layer}  |  k={config.k}  |  d_in={config.d_in}  |  d_sae={config.d_sae}")
+    print(f"Persona mode : {'pre-TopK dense (recommended)' if config.use_pre_topk_personas else 'post-TopK sparse (legacy)'}")
+    print(f"Fine-tuning  : {'disabled (--skip_finetune)' if args.skip_finetune else 'enabled'}")
     print(f"Modules     : {modules}")
 
     sae = None

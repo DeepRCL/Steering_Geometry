@@ -43,21 +43,70 @@ from .topk_sae_model import TopKSparseAutoencoder, get_or_download_sae
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Sparse steering hook
+# Steering hooks
 # ──────────────────────────────────────────────────────────────────────────────
-def make_topk_steer_hook(
+def make_pre_topk_steer_hook(
     sae: TopKSparseAutoencoder,
-    persona_vec: torch.Tensor,   # (d_sae,) — the sparse persona direction
+    persona_vec: torch.Tensor,   # (d_sae,) — pre-TopK persona direction
     alpha: float,
     d_in: int,
 ):
     """
-    Returns a forward hook for model.model.layers[layer] that:
-      1. Intercepts the residual-stream output (batch, seq, d_in).
-      2. Encodes into Qwen-Scope sparse space: z = sae.encode(residual).
-      3. Adds the persona direction: z_steered = z + alpha * persona_vec.
-      4. Decodes back: residual_steered = sae.decode(z_steered).
-      5. Returns the steered residual in the same tuple format as the original.
+    Pre-TopK steering hook (recommended, matches persona vector computation).
+
+    Injects the persona direction into the pre-activation space BEFORE the TopK
+    gate, so the value signal biases which 50 features are selected:
+
+        residual  (batch, seq, d_in)
+          ↓  sae.pre_encode  [dense, continuous]
+        pre       (batch, seq, d_sae)
+          ↓  pre_steered = pre + α · persona_vec
+          ↓  TopK(pre_steered, k=50)
+        z_steered (batch, seq, d_sae)  — 50 active, value-biased
+          ↓  sae.decode
+        residual_steered  (batch, seq, d_in)   ← replaces layer output
+
+    Use this when config.use_pre_topk_personas=True (the default).
+    """
+    def hook(module, inp, output):
+        hidden = output[0] if isinstance(output, tuple) else output
+        original_shape = hidden.shape                          # (batch, seq, d_in)
+        dtype = hidden.dtype
+        flat = hidden.reshape(-1, d_in).to(torch.float32)     # (batch*seq, d_in)
+
+        # Compute dense pre-activations (before TopK)
+        pre = sae.pre_encode(flat)                             # (batch*seq, d_sae)
+        # Inject persona direction in pre-activation space
+        pv = persona_vec.to(device=pre.device, dtype=pre.dtype)
+        pre_steered = pre + alpha * pv
+        # Apply TopK to the steered pre-activations
+        topk_vals, topk_idx = pre_steered.topk(sae.k, dim=-1)
+        z_steered = torch.zeros_like(pre_steered)
+        z_steered.scatter_(-1, topk_idx, topk_vals)
+        # Decode → back to dense residual space
+        recon = sae.decode(z_steered)                          # (batch*seq, d_in)
+        recon = recon.reshape(original_shape).to(dtype)
+
+        if isinstance(output, tuple):
+            return (recon,) + output[1:]
+        return recon
+
+    return hook
+
+
+def make_topk_steer_hook(
+    sae: TopKSparseAutoencoder,
+    persona_vec: torch.Tensor,   # (d_sae,) — post-TopK persona direction
+    alpha: float,
+    d_in: int,
+):
+    """
+    Post-TopK steering hook (legacy, use make_pre_topk_steer_hook instead).
+
+    Adds the persona direction to the post-TopK sparse z AFTER TopK selection.
+    This bypasses the TopK gate, so the value signal cannot change which features
+    are selected — it only modulates already-selected features.
+    Use this only when config.use_pre_topk_personas=False.
     """
     def hook(module, inp, output):
         hidden = output[0] if isinstance(output, tuple) else output
@@ -277,8 +326,15 @@ def evaluate_sparse_steering(
 
         steered_results: Dict = {}
 
+        # Use pre-TopK hook when persona vectors are in pre-activation space
+        hook_factory = (
+            make_pre_topk_steer_hook
+            if config.use_pre_topk_personas
+            else make_topk_steer_hook
+        )
+
         for alpha in config.alpha_values:
-            hook_fn = make_topk_steer_hook(sae, persona_vec, alpha, config.d_in)
+            hook_fn = hook_factory(sae, persona_vec, alpha, config.d_in)
             handle = layer_module.register_forward_hook(hook_fn)
 
             try:

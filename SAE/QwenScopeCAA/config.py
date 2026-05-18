@@ -127,6 +127,19 @@ class QwenScopePipelineConfig:
     # SAE feature dimension (16× expansion)
     d_sae: int = 65536
 
+    # ── Persona vector mode ───────────────────────────────────────────────────
+    # If True (recommended), compute persona vectors from the DENSE pre-TopK
+    # encoder activations (x @ W_enc.T + b_enc) rather than from the post-TopK
+    # sparse z.  This avoids two failure modes:
+    #   1. Post-TopK vectors are ~99.9% zeros (50/65536 active per sample), so
+    #      their mean is dominated by "common" features shared by all values,
+    #      collapsing pairwise cosine similarities and hurting geometry.
+    #   2. TopK includes negative pre-activations; their presence in the persona
+    #      difference is semantically incorrect (features represent presence).
+    # Steering is also applied in the pre-activation space (before TopK), so
+    # the persona direction biases which 50 features are selected.
+    use_pre_topk_personas: bool = True
+
     # ── Fine-tuning ──────────────────────────────────────────────────────────
     # MSE-only fine-tuning (TopK enforces sparsity; no L1 regularisation needed)
     finetune_lr: float = 1e-5

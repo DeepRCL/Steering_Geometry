@@ -152,24 +152,30 @@ def extract_sparse_vectors(
             pos_z: List[torch.Tensor] = []
             neg_z: List[torch.Tensor] = []
 
+            # Choose pre-TopK (dense) or post-TopK (sparse) representation.
+            # pre_encode is strongly preferred: post-TopK vectors have ~99.9%
+            # zero entries, so pairwise cosine similarities collapse onto shared
+            # "common" features rather than value-discriminative ones.
+            encode_fn = sae.pre_encode if config.use_pre_topk_personas else sae.encode
+
             for pair in tqdm(pairs, desc=f"  [{val}]", leave=False):
                 pos_tokens, neg_tokens = format_prompts(pair, tokenizer, is_instruct)
 
                 # Positive prompt
                 _current.clear()
                 model(torch.tensor([pos_tokens]).to(device))
-                z_pos = sae.encode(_current["act"])   # (d_sae,)
+                z_pos = encode_fn(_current["act"])    # (d_sae,)
                 pos_z.append(z_pos.detach())
 
                 # Negative prompt
                 _current.clear()
                 model(torch.tensor([neg_tokens]).to(device))
-                z_neg = sae.encode(_current["act"])   # (d_sae,)
+                z_neg = encode_fn(_current["act"])    # (d_sae,)
                 neg_z.append(z_neg.detach())
 
             pos_mean = torch.stack(pos_z).mean(dim=0)
             neg_mean = torch.stack(neg_z).mean(dim=0)
-            vec = pos_mean - neg_mean   # (d_sae,) — the sparse persona vector
+            vec = pos_mean - neg_mean   # (d_sae,) persona vector
 
             torch.save(vec, cache_p)
             vectors[val] = vec
