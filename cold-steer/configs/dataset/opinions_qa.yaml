@@ -1,0 +1,8 @@
+_target_: src.dataset.OpinionsQADataset
+data_root: ./data/distralign/opinions_qa
+wave: 500
+demographic_group: POLPARTY
+demographic: Democrat
+tokenizer_template: chat
+num_train_samples: ${steering_params.num_samples}
+training: ce

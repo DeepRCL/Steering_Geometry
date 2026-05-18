@@ -1,0 +1,4 @@
+_target_: src.llm.SteerableLLM
+model_name: meta-llama/Meta-Llama-3-8B-Instruct
+
+steering_layer_indices: ${steering_params.layers}

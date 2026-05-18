@@ -1,0 +1,9 @@
+_target_: src.steerer.ReFTSteerer
+steerable_llm: ${llm}
+training: ${dataset.training}
+steer_masking: ${steering_params.masking}
+intervention_type: vector
+training_params:
+  lr: 0.001
+  num_epochs: 2
+  batch_size: 8

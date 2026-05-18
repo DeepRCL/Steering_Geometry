@@ -1,0 +1,4 @@
+_target_: src.llm.SteerableLLM
+model_name: mistralai/Mistral-7B-v0.1
+# model_name: /workingdir/ksharma323/llama7b
+steering_layer_indices: ${steering_params.layers}

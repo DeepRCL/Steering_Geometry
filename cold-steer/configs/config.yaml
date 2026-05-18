@@ -1,0 +1,29 @@
+defaults:
+  - hydra/launcher: joblib
+  - llm: llama7b
+  - steerer: base
+  - dataset: caa
+
+steering_params:
+  layers: [16]
+  masking: all
+  num_samples: -1
+
+seed: 42
+
+log_dir: 
+
+hydra:
+  launcher:
+    n_jobs: 1
+  run:
+    dir: ${log_dir}/runs/${now:%Y-%m-%d}/${now:%H-%M-%S}
+  sweep:
+    dir: ${log_dir}/sweeps/${now:%Y-%m-%d}/${now:%H-%M-%S}
+    # subdir: ${hydra.job.override_dirname}
+
+# insert wandb here
+wandb:
+  entity: 
+  project: 
+

@@ -1,0 +1,7 @@
+_target_: src.dataset.AxBenchDataset
+data_root: ./data/axbench
+task: sycophancy
+training: dpo
+num_concepts: 500
+num_train_samples: ${steering_params.num_samples}
+tokenizer_template: input_response

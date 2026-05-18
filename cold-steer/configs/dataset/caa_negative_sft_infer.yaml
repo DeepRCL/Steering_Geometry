@@ -1,0 +1,6 @@
+_target_: src.dataset.CAADataset
+data_root: ./data/CAA
+task: sycophancy
+training: negative_sft
+num_train_samples: ${steering_params.num_samples}
+tokenizer_template: input_response

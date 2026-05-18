@@ -1,0 +1,4 @@
+_target_: src.llm.SteerableLLM
+model_name: google/gemma-2-2b
+
+steering_layer_indices: ${steering_params.layers}

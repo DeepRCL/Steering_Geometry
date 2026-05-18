@@ -1,0 +1,5 @@
+_target_: src.steerer.ContrastiveSteerer
+steerable_llm: ${llm}
+eta: 1
+addition_transform: linear
+training: sft
