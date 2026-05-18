@@ -124,8 +124,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--model_name", default="Qwen/Qwen3.5-9B-Base")
     p.add_argument(
         "--device",
-        default="auto",
-        help="auto | cuda | cpu | mps (default: auto)",
+        default="cuda",
+        help="cuda | cpu | mps | auto (default: cuda)",
     )
 
     # ── Qwen-Scope SAE ────────────────────────────────────────────────────────

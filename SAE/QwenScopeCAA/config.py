@@ -112,7 +112,7 @@ class QwenScopePipelineConfig:
 
     # ── Model ────────────────────────────────────────────────────────────────
     model_name: str = "Qwen/Qwen3.5-9B-Base"
-    device: str = "auto"
+    device: str = "cuda"
 
     # ── Qwen-Scope SAE ───────────────────────────────────────────────────────
     # HuggingFace repo ID for the Qwen-Scope SAE collection
