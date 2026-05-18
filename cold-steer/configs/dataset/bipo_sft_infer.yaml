@@ -1,0 +1,7 @@
+_target_: src.dataset.BiPODataset
+data_root: ./data/BiPO
+task: hallucination
+training: sft
+num_train_samples: ${steering_params.num_samples}
+evaluation: infer
+tokenizer_template: input_output

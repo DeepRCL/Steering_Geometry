@@ -1,0 +1,6 @@
+_target_: src.steerer.KernelLossSteerer
+steerable_llm: ${llm}
+eta: 1
+training: ${dataset.training}
+kernel: none
+steer_masking: ${steering_params.masking}

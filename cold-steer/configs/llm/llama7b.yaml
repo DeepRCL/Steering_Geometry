@@ -1,0 +1,4 @@
+_target_: src.llm.SteerableLLM
+model_name: meta-llama/Llama-2-7b-hf
+# model_name: /workingdir/ksharma323/llama7b
+steering_layer_indices: ${steering_params.layers}
