@@ -156,7 +156,12 @@ def _parse_args() -> argparse.Namespace:
         "--k",
         type=int,
         default=50,
-        help="TopK budget — must match the Qwen-Scope SAE's training config (default: 50)",
+        help=(
+            "TopK budget: how many SAE features are kept active per token (default: 50).\n"
+            "The Qwen-Scope SAE was trained with k=50, but any value can be used at\n"
+            "inference time. Lower k = sparser features; higher k = richer activations.\n"
+            "Each k gets its own output directory so results never overwrite each other."
+        ),
     )
     p.add_argument("--d_in",  type=int, default=4096,  help="Model hidden dim (default: 4096)")
     p.add_argument("--d_sae", type=int, default=65536, help="SAE feature dim (default: 65536)")

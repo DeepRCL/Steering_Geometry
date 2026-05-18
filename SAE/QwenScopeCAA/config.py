@@ -164,7 +164,9 @@ class QwenScopePipelineConfig:
 
     @property
     def run_dir(self) -> str:
-        return os.path.join(self.output_dir, f"{self.model_name_safe}_layer{self.layer}")
+        # Include k in the directory name so experiments with different TopK
+        # budgets never share a cache or overwrite each other's results.
+        return os.path.join(self.output_dir, f"{self.model_name_safe}_layer{self.layer}_k{self.k}")
 
     def subdir(self, name: str) -> str:
         path = os.path.join(self.run_dir, name)
