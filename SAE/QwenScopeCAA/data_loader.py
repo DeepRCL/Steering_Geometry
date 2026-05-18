@@ -40,7 +40,7 @@ def _load_base(path: str) -> pd.DataFrame:
 
 
 def _load_touche(path: str, max_per_value: int) -> pd.DataFrame:
-    df = pd.read_csv(path)
+    df = pd.read_csv(path, on_bad_lines="skip", engine="python")
     df = df[df["caa_suitable"] == True].copy()  # noqa: E712
     df = df.rename(columns={"argument_id": "sample_id"})
     df = df[["sample_id", "question", "value", "positive_answer", "negative_answer"]]
