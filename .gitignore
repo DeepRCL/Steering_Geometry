@@ -26,4 +26,6 @@ CAA/Geometry/outputs/
 SAE/outputs/
 SAE/sae_models/
 SAE/SparseCAA/outputs/
-llm-steering-opt/steering_results/
+llm-steering-opt/steering_results
+SAE/QwenScopeCAA/outputs/
+/
