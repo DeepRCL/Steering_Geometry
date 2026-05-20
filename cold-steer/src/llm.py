@@ -45,9 +45,14 @@ class SteerableLLM(nn.Module):
             self.steering_layers = [self.model.model.layers[layer_idx-1] for layer_idx in steering_layer_indices]
             self.steering_params = [{k: v for k, v in self.params.items() if ('model.embed' in k) or (any([(f'model.layers.{i}.' in k) \
                                         for i in range(layer_idx+1)]))} for layer_idx in steering_layer_indices]
-            
-            self.steering_in_dims = [self.model.model.layers[layer_idx-1].self_attn.o_proj.out_features for layer_idx in steering_layer_indices]
-            self.steering_out_dims = [self.model.model.layers[layer_idx].self_attn.q_proj.in_features for layer_idx in steering_layer_indices]
+
+            # Residual-stream dim. The original code read this off
+            # `self_attn.{q,o}_proj`, but on hybrid architectures (e.g. Qwen3-Next / Qwen3.5)
+            # some decoder blocks are linear-attention layers without a `self_attn` module.
+            # `hidden_size` is identical for all standard layer types and survives the swap.
+            hidden_size = self.model.config.hidden_size
+            self.steering_in_dims = [hidden_size for _ in steering_layer_indices]
+            self.steering_out_dims = [hidden_size for _ in steering_layer_indices]
         else:
             raise NotImplementedError(
                 f"SteerableLLM does not know the module layout for '{name}'. "

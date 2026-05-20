@@ -31,8 +31,8 @@ from odesteer.lm import HuggingFaceLM
 from odesteer.steer import get_steer_model
 from odesteer.utils import get_project_dir
 
-import config
-import geometry as geometry_module
+import config  # type: ignore
+import geometry as geometry_module  # type: ignore
 
 
 def parse_args():
@@ -51,7 +51,7 @@ def parse_args():
                         default=str(get_project_dir() / "data" / "final_dataset_v3.csv"))
     parser.add_argument("--relations_path", type=str,
                         default=str(get_project_dir() / "data" / "schwartz_relations.json"))
-    parser.add_argument("--train_ratio", type=float, default=0.1)
+    parser.add_argument("--train_ratio", type=float, default=0.2)
     parser.add_argument("--seed", type=int, default=10)
 
     # Steering method
@@ -74,7 +74,7 @@ def parse_args():
     parser.add_argument("--layer_sweep_n_samples", type=int, default=20)
 
     # Evaluation
-    parser.add_argument("--n_eval_samples", type=int, default=20)
+    parser.add_argument("--n_eval_samples", type=int)
     parser.add_argument("--skip_eval", action="store_true")
 
     # Output
@@ -265,19 +265,40 @@ def evaluate_steering(
     verbose: bool = True,
 ) -> Dict[str, Any]:
     """
-    Evaluate steering using HuggingFaceLM.compute_answer_prob(), which
-    is exactly how ODESteer evaluates on TruthfulQA.
+    Evaluate steering using log-probabilities on the validation set.
 
-    For each value, we temporarily set hf_lm.steer_model to the fitted
-    model, then call compute_answer_prob with steer=True/False.
+    For each value and each validation sample we compute the mean per-token 
+    log-probability of the positive and negative completions, both with and 
+    without steering.
     """
     if verbose:
         print("─" * 60)
-        print("  Steering Evaluation (ODESteer compute_answer_prob)")
+        print("  Steering Evaluation (Log-Likelihood on Validation Set)")
         print("─" * 60)
 
     records = []
     eval_values = [v for v in values if v in steer_models]
+
+    def _compute_logprob(prompt: str, completion: str, steer: bool = False) -> float:
+        tokenizer = hf_lm.tokenizer
+        prompt_len = tokenizer(prompt, return_tensors="pt").input_ids.shape[1]
+        full_prompt = prompt + completion
+        full_inputs = tokenizer(full_prompt, return_tensors="pt").to(hf_lm.model.device)
+        
+        if steer and hf_lm.steer_model is not None:
+            hf_lm.register_steer_prob_hook(prompt_len - 1, {"T": args.T})
+            outputs = hf_lm.model(**full_inputs)
+            hf_lm.remove_steer_prob_hook()
+        else:
+            outputs = hf_lm.model(**full_inputs)
+            
+        answer_ids = full_inputs.input_ids[0, prompt_len:]
+        if len(answer_ids) == 0:
+            return 0.0
+        answer_logits = outputs.logits[0, prompt_len-1:-1]
+        full_log_probs = torch.nn.functional.log_softmax(answer_logits, dim=-1)
+        token_log_probs = full_log_probs.gather(-1, answer_ids.unsqueeze(-1)).squeeze(-1)
+        return token_log_probs.sum().item() / len(answer_ids)
 
     for value in eval_values:
         value_val_rows = config.get_rows_for_value(val_rows, value)
@@ -295,27 +316,26 @@ def evaluate_steering(
 
         for row in tqdm(value_val_rows, desc=f"Eval: {value}", leave=False):
             question = row["question"]
-            answers = [row["positive_answer"], row["negative_answer"]]
+            pos = row["positive_answer"]
+            neg = row["negative_answer"]
+            
+            prompt_template = "Q: {question}\nA: "
+            prompt = prompt_template.format(question=question)
 
             # Baseline (no steering)
-            probs_base = hf_lm.compute_answer_prob(
-                question, answers, steer=False,
-                prompt_template="Q: {question}\nA: ",
-            )
+            lp_pos_base = _compute_logprob(prompt, pos, steer=False)
+            lp_neg_base = _compute_logprob(prompt, neg, steer=False)
 
-            # Steered (using ODESteer's native hook mechanism)
-            probs_steer = hf_lm.compute_answer_prob(
-                question, answers, steer=True,
-                steer_kwargs={"T": args.T},
-                prompt_template="Q: {question}\nA: ",
-            )
+            # Steered
+            lp_pos_steer = _compute_logprob(prompt, pos, steer=True)
+            lp_neg_steer = _compute_logprob(prompt, neg, steer=True)
 
             records.append({
                 "value": value,
-                "prob_pos_base": float(probs_base[0]),
-                "prob_neg_base": float(probs_base[1]),
-                "prob_pos_steer": float(probs_steer[0]),
-                "prob_neg_steer": float(probs_steer[1]),
+                "lp_pos_base": lp_pos_base,
+                "lp_neg_base": lp_neg_base,
+                "lp_pos_steer": lp_pos_steer,
+                "lp_neg_steer": lp_neg_steer,
             })
 
     # Reset steer model
@@ -328,13 +348,24 @@ def evaluate_steering(
 
     def _metrics(recs):
         n = len(recs)
-        cb = sum(1 for r in recs if r["prob_pos_base"] > r["prob_neg_base"])
-        cs = sum(1 for r in recs if r["prob_pos_steer"] > r["prob_neg_steer"])
+        cb = sum(1 for r in recs if r["lp_pos_base"] > r["lp_neg_base"])
+        cs = sum(1 for r in recs if r["lp_pos_steer"] > r["lp_neg_steer"])
+        delta_lp = [
+            (r["lp_pos_steer"] - r["lp_neg_steer"]) - 
+            (r["lp_pos_base"] - r["lp_neg_base"])
+            for r in recs
+        ]
         return {
             "n_samples": n,
             "accuracy_baseline": round(cb / n, 4),
             "accuracy_steered": round(cs / n, 4),
             "delta_accuracy": round((cs - cb) / n, 4),
+            "mean_delta_logprob": round(float(np.mean(delta_lp)), 6),
+            "std_delta_logprob": round(float(np.std(delta_lp)), 6),
+            "mean_lp_pos_baseline": round(float(np.mean([r["lp_pos_base"] for r in recs])), 6),
+            "mean_lp_pos_steered": round(float(np.mean([r["lp_pos_steer"] for r in recs])), 6),
+            "mean_lp_neg_baseline": round(float(np.mean([r["lp_neg_base"] for r in recs])), 6),
+            "mean_lp_neg_steered": round(float(np.mean([r["lp_neg_steer"] for r in recs])), 6),
         }
 
     overall = _metrics(records)
@@ -345,18 +376,59 @@ def evaluate_steering(
             per_value[value] = _metrics(vrecs)
 
     if verbose:
-        print(f"\n  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} {'Δ Acc':>7}")
-        print("  " + "-" * 65)
+        print(f"\n  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} {'Δ Acc':>7} {'Δ logP':>9}")
+        print("  " + "-" * 75)
         for value in values:
             if value not in per_value:
                 continue
             m = per_value[value]
             print(f"  {value:<35} {m['accuracy_baseline']:>9.1%} "
-                  f"{m['accuracy_steered']:>10.1%} {m['delta_accuracy']:>+7.1%}")
-        print("  " + "-" * 65)
+                  f"{m['accuracy_steered']:>10.1%} {m['delta_accuracy']:>+7.1%} "
+                  f"{m['mean_delta_logprob']:>+9.4f}")
+        print("  " + "-" * 75)
         o = overall
         print(f"  {'OVERALL':<35} {o['accuracy_baseline']:>9.1%} "
-              f"{o['accuracy_steered']:>10.1%} {o['delta_accuracy']:>+7.1%}\n")
+              f"{o['accuracy_steered']:>10.1%} {o['delta_accuracy']:>+7.1%} "
+              f"{o['mean_delta_logprob']:>+9.4f}\n")
+
+    def _plot_eval_accuracy(per_val: Dict[str, dict], ovr: dict, out_dir: str, vals: List[str]):
+        try:
+            import matplotlib.pyplot as plt
+        except ImportError:
+            if verbose:
+                print("  matplotlib not installed, skipping evaluation plot.")
+            return
+
+        labels = [v for v in vals if v in per_val]
+        if not labels:
+            return
+
+        base_accs = [per_val[v]["accuracy_baseline"] for v in labels]
+        steer_accs = [per_val[v]["accuracy_steered"] for v in labels]
+
+        x = np.arange(len(labels))
+        width = 0.35
+
+        fig, ax = plt.subplots(figsize=(max(12, len(labels) * 0.9), 6))
+        ax.bar(x - width / 2, base_accs, width, label="Baseline", color="#90CAF9", edgecolor="#1565C0")
+        ax.bar(x + width / 2, steer_accs, width, label="Steered", color="#A5D6A7", edgecolor="#2E7D32")
+
+        ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.5, label="Chance (50%)")
+        ax.set_ylabel("Accuracy (positive preferred)")
+        ax.set_title("Baseline vs Steered Accuracy per Value")
+        ax.set_xticks(x)
+        ax.set_xticklabels(labels, rotation=45, ha="right")
+        ax.legend()
+
+        plt.tight_layout()
+        plot_path = os.path.join(out_dir, "steering_eval_accuracy.png")
+        fig.savefig(plot_path, dpi=300, bbox_inches="tight")
+        plt.close(fig)
+        if verbose:
+            print(f"  Saved evaluation plot → {plot_path}")
+
+    if args.output_dir:
+        _plot_eval_accuracy(per_value, overall, args.output_dir, values)
 
     return {"T": args.T, "steer_type": args.steer_type, "overall": overall, "per_value": per_value}
 
@@ -390,6 +462,7 @@ def main():
         args.output_dir = str(
             get_project_dir() / "results" / "schwartz" / args.model
             / f"{args.steer_type}-layer_{args.layer_idx}-T_{args.T}-train_{args.train_ratio}"
+            / f"seed_{args.seed}"
         )
     os.makedirs(args.output_dir, exist_ok=True)
 
@@ -420,6 +493,19 @@ def main():
         device="auto",
         dtype=dtype,
     )
+
+    if torch.cuda.is_available():
+        # mem_get_info returns (free_memory, total_memory) in bytes
+        free_bytes, total_bytes = torch.cuda.mem_get_info()
+        free_gb = free_bytes / 1024**3
+        total_gb = total_bytes / 1024**3
+        
+        print(f"Device: {torch.cuda.get_device_name(0)}")
+        print(f"Free Memory: {free_gb:.2f} GB")
+        print(f"Total Memory: {total_gb:.2f} GB")
+    else:
+        print("CUDA is not available.")
+
     
     # Ensure model is in float32 to avoid BFloat16 errors in ODESteer kernels
     if dtype == torch.float32:
@@ -439,6 +525,7 @@ def main():
         args.output_dir = str(
             get_project_dir() / "results" / "schwartz" / args.model
             / f"{args.steer_type}-layer_{layer_idx}-T_{args.T}-train_{args.train_ratio}"
+            / f"seed_{args.seed}"
         )
         os.makedirs(args.output_dir, exist_ok=True)
         with open(os.path.join(args.output_dir, "layer_sweep.json"), "w") as f:

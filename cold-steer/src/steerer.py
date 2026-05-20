@@ -151,7 +151,10 @@ class BaseSteerer():
             
     def get_intermediate_activations(self, params, inputs):
         def get_layer_output_hook_with_exception(module, input, output, layer_idx=-1):
-            activation = output[0].clone() #.detach().requires_grad_(True)
+            # Hybrid architectures (Qwen3-Next / Qwen3.5) return a bare tensor
+            # (B, T, D); standard transformer layers return a tuple. Handle both.
+            hidden = output[0] if isinstance(output, tuple) else output
+            activation = hidden.clone() #.detach().requires_grad_(True)
             self.layer_outputs[layer_idx] = activation
             # raise Exception
         try:
@@ -306,16 +309,22 @@ class LossFDSteerer (BaseSteerer):
                 loss, _ = compute_dpo_loss(self.steerable_llm, None, {k: v for k, v in datum.items() if 'labels' not in k}, 
                                             {k: v for k, v in datum.items() if 'labels' in k}, beta=0.1)
 
-            vals = torch.autograd.grad(loss, self.steerable_llm.get_params(running_grads.keys()), retain_graph=True)
+            vals = torch.autograd.grad(
+                loss, self.steerable_llm.get_params(running_grads.keys()), retain_graph=False
+            )
             grads = dict (zip(running_grads.keys(), vals))
             for k in running_grads:
                 running_grads[k] += grads[k].detach().clone()
+            del loss, model_out, vals, grads
             
         with torch.no_grad():
             mean_grads = {k: v/len(dataset) for k, v in running_grads.items()}
             self.steered_params = {k: v + self.epsilon * mean_grads[k].to(v.device) for k, v in self.steerable_llm.params.items() if k in mean_grads}
+            del mean_grads, running_grads
             
         self.steerable_llm.set_steering_params(requires_grad=False)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
     def reset_steering(self):
         self.z_eps = None
@@ -330,7 +339,8 @@ class LossFDSteerer (BaseSteerer):
             steering_mask = self.get_steering_mask(self.gen_attention_mask)
             self.reset_steering()
 
-        z = output[0]
+        is_tuple = isinstance(output, tuple)
+        z = output[0] if is_tuple else output
         if self.z_eps is None:
             self.z_eps = self.get_intermediate_activations(params=self.steered_params, inputs=inputs)
             
@@ -340,7 +350,7 @@ class LossFDSteerer (BaseSteerer):
             z[steering_mask] -= self.eta * (z_eps[steering_mask] - z[steering_mask])/self.epsilon
         else:
             z -= self.eta * (z_eps - z)/self.epsilon
-        return z,
+        return ((z,) + output[1:]) if is_tuple else z
 
 class LossFDThreshSteerer (BaseSteerer):
     def __init__(
@@ -393,18 +403,24 @@ class LossFDThreshSteerer (BaseSteerer):
                 loss, _ = compute_dpo_loss(self.steerable_llm, None, {k: v for k, v in datum.items() if 'labels' not in k}, 
                                             {k: v for k, v in datum.items() if 'labels' in k}, beta=0.1)
 
-            vals = torch.autograd.grad(loss, self.steerable_llm.get_params(running_grads.keys()), retain_graph=True)
+            vals = torch.autograd.grad(
+                loss, self.steerable_llm.get_params(running_grads.keys()), retain_graph=False
+            )
             grads = dict (zip(running_grads.keys(), vals))
             for k in running_grads:
                 running_grads[k] += grads[k].detach().clone()
+            del loss, model_out, vals, grads
             
         with torch.no_grad():
             mean_grads = {k: v/len(dataset) for k, v in running_grads.items()}
             self.steered_params = {k: v + self.epsilon * mean_grads[k].to(v.device) \
                         if (mean_grads[k] * self.epsilon).max() < self.thresh else v \
                 for k, v in self.steerable_llm.params.items() if k in mean_grads}
+            del mean_grads, running_grads
             
         self.steerable_llm.set_steering_params(requires_grad=False)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
     def reset_steering(self):
         self.z_eps = None
@@ -419,7 +435,8 @@ class LossFDThreshSteerer (BaseSteerer):
             steering_mask = self.get_steering_mask(self.gen_attention_mask)
             self.reset_steering()
 
-        z = output[0]
+        is_tuple = isinstance(output, tuple)
+        z = output[0] if is_tuple else output
         if self.z_eps is None:
             self.z_eps = self.get_intermediate_activations(params=self.steered_params, inputs=inputs)
             
@@ -429,7 +446,7 @@ class LossFDThreshSteerer (BaseSteerer):
             z[steering_mask] -= self.eta * (z_eps[steering_mask] - z[steering_mask])/self.epsilon
         else:
             z -= self.eta * (z_eps - z)/self.epsilon
-        return z,
+        return ((z,) + output[1:]) if is_tuple else z
     
     
 
@@ -482,8 +499,11 @@ class LossFDLoraSteerer (BaseSteerer):
                 loss, _ = compute_dpo_loss(self.steerable_llm, None, {k: v for k, v in datum.items() if 'labels' not in k}, 
                                             {k: v for k, v in datum.items() if 'labels' in k}, beta=0.1)
 
-            vals = torch.autograd.grad(loss, self.steerable_llm.get_params(running_grads.keys()), retain_graph=True)
+            vals = torch.autograd.grad(
+                loss, self.steerable_llm.get_params(running_grads.keys()), retain_graph=False
+            )
             grads = dict (zip(running_grads.keys(), vals))
+            del loss, model_out, vals
             
             low_rank_updates = lora_style_update(grads, rank=16)
             # Apply updates
@@ -513,7 +533,8 @@ class LossFDLoraSteerer (BaseSteerer):
             steering_mask = self.get_steering_mask(self.gen_attention_mask)
             self.reset_steering()
 
-        z = output[0]
+        is_tuple = isinstance(output, tuple)
+        z = output[0] if is_tuple else output
         if self.z_eps is None:
             self.z_eps = self.get_intermediate_activations(params=self.steered_params, inputs=inputs)
             
@@ -523,7 +544,7 @@ class LossFDLoraSteerer (BaseSteerer):
             z[steering_mask] -= self.eta * (z_eps[steering_mask] - z[steering_mask])/self.epsilon
         else:
             z -= self.eta * (z_eps - z)/self.epsilon
-        return z,
+        return ((z,) + output[1:]) if is_tuple else z
 
 
 class LossDirectSteerer(BaseSteerer):
@@ -562,16 +583,22 @@ class LossDirectSteerer(BaseSteerer):
                 loss, _ = compute_dpo_loss(self.steerable_llm, None, {k: v for k, v in datum.items() if 'labels' not in k}, 
                                             {k: v for k, v in datum.items() if 'labels' in k}, beta=0.1)
 
-            vals = torch.autograd.grad(loss, self.steerable_llm.get_params(running_grads.keys()), retain_graph=True)
+            vals = torch.autograd.grad(
+                loss, self.steerable_llm.get_params(running_grads.keys()), retain_graph=False
+            )
             grads = dict (zip(running_grads.keys(), vals))
             for k in running_grads:
                 running_grads[k] += grads[k].detach().clone()
+            del loss, model_out, vals, grads
         
         with torch.no_grad():
             mean_grads = {k: v/len(dataset) for k, v in running_grads.items()}
             self.steered_params = {k: v - self.eta * mean_grads[k].to(v.device) for k, v in self.steerable_llm.params.items() if k in mean_grads}
+            del mean_grads, running_grads
             
         self.steerable_llm.set_steering_params(requires_grad=False)
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
         
 
     def reset_steering(self):
@@ -582,7 +609,8 @@ class LossDirectSteerer(BaseSteerer):
         if getattr(self, '_bypass_steering', False):
             return output
 
-        z = output[0]
+        is_tuple = isinstance(output, tuple)
+        z = output[0] if is_tuple else output
         if self.z_new is None:
             self.z_new = self.get_intermediate_activations(params=self.steered_params, inputs=inputs)
             
@@ -592,7 +620,7 @@ class LossDirectSteerer(BaseSteerer):
             z[steering_mask] = z_new[steering_mask]
         else:
             z = z_new
-        return z,
+        return ((z,) + output[1:]) if is_tuple else z
 
    
 class KernelLossSteerer (BaseSteerer):
@@ -676,12 +704,14 @@ class KernelLossSteerer (BaseSteerer):
         #     return
         
         def hook_with_grad(module, input, output, layer_idx=-1):
-            if output[0].requires_grad:
-                activation = output[0]
+            is_tuple = isinstance(output, tuple)
+            hidden = output[0] if is_tuple else output
+            if hidden.requires_grad:
+                activation = hidden
             else:
-                activation = output[0].detach().clone().requires_grad_(True)
+                activation = hidden.detach().clone().requires_grad_(True)
             self.layer_outputs[layer_idx] = activation
-            return (activation,)
+            return ((activation,) + output[1:]) if is_tuple else activation
         
         loss_data = []
         assert(self.training_batch_size == 1)
@@ -713,7 +743,7 @@ class KernelLossSteerer (BaseSteerer):
                     prompt_last_id = torch.where(datum['matching_labels'][0] != -100)[0][0] - 1
                 else:
                     prompt_last_id = -1
-                grads_loss = torch.autograd.grad(loss, self.layer_outputs.values(), retain_graph=True)
+                grads_loss = torch.autograd.grad(loss, self.layer_outputs.values(), retain_graph=False)
                 grads_loss = {x: y[0, prompt_last_id, :].detach().cpu() for x, y in zip(self.layer_outputs, grads_loss)}
                 layer_outputs = {x: y[0, prompt_last_id, :].detach().cpu() for x, y in self.layer_outputs.items()}
             finally:
@@ -740,7 +770,8 @@ class KernelLossSteerer (BaseSteerer):
             steering_mask = self.get_steering_mask(self.gen_attention_mask)
             self.reset_steering()
         
-        activation = output[0]
+        is_tuple = isinstance(output, tuple)
+        activation = output[0] if is_tuple else output
         kappa, loss_v = self.loss_data
         kappa = kappa[layer_idx].to(activation.device)
         loss_v = loss_v[layer_idx].to(activation.device)
@@ -758,7 +789,7 @@ class KernelLossSteerer (BaseSteerer):
             activation[steering_mask] -= self.eta * v_steer.squeeze()
         else:
             activation -= self.eta * v_steer
-        return activation,
+        return ((activation,) + output[1:]) if is_tuple else activation
     
     
     def _compute_grads_with_vjp(self, inputs, vector, token_id=-1):
@@ -796,7 +827,8 @@ class ContrastiveSteerer(BaseSteerer):
         self.contrastive_vector = None
         
     def get_layer_outputs_last_hook(self, module, input, output, layer_idx=-1, label_mask=None):
-        activation = output[0].clone() #.detach().requires_grad_(True)
+        hidden = output[0] if isinstance(output, tuple) else output
+        activation = hidden.clone() #.detach().requires_grad_(True)
         label_mask = -2 if label_mask is None else label_mask.to(activation.device)
         self.layer_outputs[layer_idx] = activation[label_mask].reshape(
             (label_mask.sum(dim=1).shape[0], label_mask.sum(dim=1)[0], 
@@ -850,7 +882,8 @@ class ContrastiveSteerer(BaseSteerer):
             steering_mask = self.get_steering_mask(self.gen_attention_mask)
             self.reset_steering()
         
-        z = output[0]
+        is_tuple = isinstance(output, tuple)
+        z = output[0] if is_tuple else output
         v_steer = self.contrastive_vector[layer_idx][None, :].to(z.device)
         if steering_mask is None: 
             steering_mask = torch.ones_like(z[:, :, 0]).bool()
@@ -865,7 +898,7 @@ class ContrastiveSteerer(BaseSteerer):
         elif self.addition_transform == 'projection': 
             piecewise_dot = torch.einsum('bj,j->b', z[steering_mask], v_steer.squeeze())
             z[steering_mask] += self.eta * (piecewise_dot[:, None]/z.norm()) * v_steer
-        return z,
+        return ((z,) + output[1:]) if is_tuple else z
         
        
 class ReFTSteerer(BaseSteerer):
@@ -917,7 +950,8 @@ class ReFTSteerer(BaseSteerer):
             steering_mask = self.get_steering_mask(self.gen_attention_mask)
             self.reset_steering()
             
-        activation = output[0] #.detach().requires_grad_(True)
+        is_tuple = isinstance(output, tuple)
+        activation = output[0] if is_tuple else output #.detach().requires_grad_(True)
         if steering_mask is not None: 
             steering_mask = steering_mask.to(activation.device)
             intervention = self.intervention[f'{layer_idx}'](activation[steering_mask].to(self.device)).to(activation.device)
@@ -925,7 +959,7 @@ class ReFTSteerer(BaseSteerer):
         else:
             intervention = self.intervention[f'{layer_idx}'](activation.to(self.device)).to(activation.device)
             activation += intervention
-        return activation,
+        return ((activation,) + output[1:]) if is_tuple else activation
         
     def reset_steering(self):
         self.intervention.eval()

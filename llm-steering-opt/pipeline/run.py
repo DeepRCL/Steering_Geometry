@@ -77,7 +77,7 @@ def parse_args():
                         help="Training samples per value (None = all)")
 
     # Evaluation
-    parser.add_argument("--n_eval_samples", type=int, default=30,
+    parser.add_argument("--n_eval_samples", type=int, default=None,
                         help="Validation samples per value for steering evaluation (None = all)")
 
     # Steering
