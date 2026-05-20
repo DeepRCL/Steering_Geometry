@@ -14,9 +14,13 @@ After all pairs for a value (three sequential steps):
        v_pos[c] = mean of pos_z[:, c] over non-zero rows  if freq_pos[c] ≥ τ
                = 0                                         otherwise
        (same for v_neg)
-  Step 3 — common feature removal (config.remove_common_features):
+  Step 3 — common feature removal (config.remove_common_features,
+       post-TopK sparse mode only):
        Features non-zero in BOTH v_pos and v_neg are zeroed on both sides.
        These are likely syntactic/positional artifacts shared across all values.
+       Skipped in pre-TopK (dense) mode because all features are non-zero,
+       which would wipe both vectors entirely; the dense subtraction already
+       cancels shared activations naturally.
   Step 4 — difference vector:
        persona_vec[value] = v_pos - v_neg          shape: (65536,)
 
@@ -232,8 +236,15 @@ def extract_sparse_vectors(
             n_neg_above_tau = int((v_neg != 0).sum().item())
 
             # Step 3 — common feature removal
+            # Only meaningful for post-TopK (sparse) representations where
+            # non-zero entries indicate actual feature activation.  In the
+            # default pre-TopK (dense) mode every dimension is non-zero, so
+            # common_mask would be all-True and wipe both vectors entirely,
+            # producing zero persona vectors.  The dense subtraction already
+            # cancels shared activations naturally (mean_pos[c] - mean_neg[c]),
+            # so this step is skipped in that mode.
             n_common = 0
-            if config.remove_common_features:
+            if config.remove_common_features and not config.use_pre_topk_personas:
                 common_mask = (v_pos != 0) & (v_neg != 0)
                 n_common = int(common_mask.sum().item())
                 v_pos = v_pos.clone()

@@ -75,6 +75,8 @@ persona_vec = v_pos - v_neg
 
 Shared features are likely syntactic or positional artifacts that fire regardless of value polarity. Removing them sharpens the value-discriminative signal.
 
+> **Note:** This step is automatically skipped in the default **pre-TopK (dense)** mode (`use_pre_topk_personas=True`). In that mode every dimension of `pre_encode` is non-zero, so the common mask would be all-True and wipe both vectors entirely, producing zero persona vectors. The dense subtraction already handles this correctly — if a feature fires equally on both sides, `mean_pos[c] − mean_neg[c] = 0` naturally. Common-feature removal is only meaningful for **post-TopK (sparse)** mode where the zero/non-zero boundary is semantically significant.
+
 ---
 
 ## Steering Mechanism
