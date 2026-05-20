@@ -18,6 +18,16 @@ Pipeline modules (run in order or independently):
   extract   — compute per-value persona vectors in the SAE sparse latent space
   evaluate  — steer the model through the sparse SAE space, measure A/B accuracy
   geometry  — Spearman ρ and visualisations (raw + mean-centred)
+
+Persona vector extraction enhancements (all gated by config flags):
+  tau                   — frequency threshold τ ∈ [0,1]: feature c is kept in
+                          the non-zero mean only if it fires in ≥ τ·N samples.
+                          Eliminates noisy features seen in only 1–2 prompts.
+  remove_common_features— zero features active in BOTH v_pos and v_neg before
+                          subtraction; removes shared syntactic/positional noise.
+  use_delta_correction  — Δ = act − decode(encode(act)) from the unsteered pass
+                          is added back after the steered decode, correcting for
+                          SAE reconstruction error in the steering hook.
 """
 from __future__ import annotations
 
@@ -139,6 +149,27 @@ class QwenScopePipelineConfig:
     # Steering is also applied in the pre-activation space (before TopK), so
     # the persona direction biases which 50 features are selected.
     use_pre_topk_personas: bool = True
+
+    # Frequency threshold τ ∈ [0, 1]: feature c is included in the per-value
+    # non-zero mean only if it is non-zero in at least τ·N training samples.
+    # Features below the threshold are zeroed in the persona vector, eliminating
+    # noise from features that fired for only 1–2 prompts.
+    # tau=0.0 → keep all features (standard mean over non-zero rows).
+    # For dense pre-TopK personas all entries are non-zero, so freq≈1.0 and the
+    # threshold is effectively a no-op unless tau is set very close to 1.0.
+    tau: float = 0.7
+
+    # If True, zero features that are non-zero in BOTH v_pos and v_neg before
+    # computing the difference vector.  Features shared by both sides are likely
+    # syntactic or positional artifacts unrelated to the value contrast.
+    remove_common_features: bool = True
+
+    # If True, compute the SAE reconstruction residual Δ = act − decode(encode(act))
+    # from the unsteered activation and add it back to the steered reconstruction.
+    # This corrects for the SAE's inherent reconstruction error, which would
+    # otherwise be injected into the residual stream on every steered forward pass,
+    # causing erratic behaviour especially in earlier layers.
+    use_delta_correction: bool = True
 
     # ── Fine-tuning ──────────────────────────────────────────────────────────
     # MSE-only fine-tuning (TopK enforces sparsity; no L1 regularisation needed)

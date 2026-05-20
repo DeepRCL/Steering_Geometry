@@ -126,6 +126,35 @@ def _parse_args() -> argparse.Namespace:
             "zeros and include negative activations, hurting geometry."
         ),
     )
+    p.add_argument(
+        "--tau",
+        type=float,
+        default=0.7,
+        help=(
+            "Frequency threshold τ ∈ [0, 1]: feature c is included in the persona\n"
+            "mean only if it is non-zero in ≥ τ fraction of training samples.\n"
+            "0.0 = keep all features (standard mean).  Default: 0.7."
+        ),
+    )
+    p.add_argument(
+        "--no_remove_common_features",
+        action="store_true",
+        help=(
+            "Disable common-feature removal.  By default, features that are\n"
+            "non-zero in BOTH v_pos and v_neg are zeroed on both sides before\n"
+            "the difference is taken, removing shared syntactic/positional noise."
+        ),
+    )
+    p.add_argument(
+        "--no_delta_correction",
+        action="store_true",
+        help=(
+            "Disable SAE reconstruction-error correction in the steering hook.\n"
+            "By default Δ = act − decode(encode(act)) from the unsteered pass is\n"
+            "added back after the steered decode to cancel the SAE's inherent\n"
+            "reconstruction error."
+        ),
+    )
     p.add_argument("--eval_split", type=float, default=0.1)
     p.add_argument("--seed", type=int, default=42)
 
@@ -225,6 +254,9 @@ def main() -> None:
         touche_samples_per_value=args.touche_samples_per_value,
         equal_samples_per_value=args.equal_samples_per_value,
         use_pre_topk_personas=not args.no_pre_topk_personas,
+        tau=args.tau,
+        remove_common_features=not args.no_remove_common_features,
+        use_delta_correction=not args.no_delta_correction,
         eval_split=args.eval_split,
         seed=args.seed,
         model_name=args.model_name,
@@ -256,8 +288,9 @@ def main() -> None:
     print(f"SAE repo     : {config.sae_repo}")
     print(f"Layer        : {config.layer}  |  k={config.k}  |  d_in={config.d_in}  |  d_sae={config.d_sae}")
     print(f"Persona mode : {'pre-TopK dense (recommended)' if config.use_pre_topk_personas else 'post-TopK sparse (legacy)'}")
+    print(f"tau          : {config.tau}  |  remove_common: {config.remove_common_features}  |  delta_correction: {config.use_delta_correction}")
     print(f"Fine-tuning  : {'disabled (--skip_finetune)' if args.skip_finetune else 'enabled'}")
-    print(f"Modules     : {modules}")
+    print(f"Modules      : {modules}")
 
     sae = None
     vectors = None

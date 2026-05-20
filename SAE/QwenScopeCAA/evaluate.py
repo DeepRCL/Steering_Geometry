@@ -2,18 +2,30 @@
 Evaluate steering via the Qwen-Scope SAE sparse latent space.
 
 The steering hook intercepts the residual stream at config.layer, passes it
-through the SAE encoder (TopK), adds the sparse persona vector scaled by alpha,
+through the SAE encoder (TopK), adds the persona vector scaled by alpha,
 then decodes back to the dense residual space.  The modified residual replaces
 the layer output; all subsequent transformer layers see the steered hidden state.
 
-Hook mechanic (per forward call at layer config.layer):
-    residual     (batch, seq, 4096)
-      ↓  sae.encode  [TopK, k=50]
-    z            (batch, seq, 65536)   — sparse feature activations
-      ↓  z_steered = z + α · persona_vec
-    z_steered    (batch, seq, 65536)
-      ↓  sae.decode
-    residual_steered  (batch, seq, 4096)   ← returned as layer output
+Pre-TopK hook mechanic (config.use_pre_topk_personas=True, the default):
+    residual       (batch, seq, 4096)
+      ↓  sae.pre_encode  [dense, linear]
+    pre            (batch, seq, 65536)
+
+    [optional Δ correction — config.use_delta_correction=True]
+      ↓  z_u = TopK(pre, k=50)
+      ↓  act_recon = sae.decode(z_u)
+      delta = residual - act_recon      (batch, seq, 4096)
+
+      ↓  pre_steered = pre + α · persona_vec
+      ↓  z_steered = TopK(pre_steered, k=50)
+      ↓  recon = sae.decode(z_steered)
+    [if delta correction]
+      recon = recon + delta             ← SAE reconstruction error corrected
+    residual_steered  (batch, seq, 4096)  ← returned as layer output
+
+The Δ correction adds back the portion of the original residual that the SAE
+cannot reconstruct.  Without it the reconstruction error is injected directly
+into the transformer's hidden state on every steered forward pass.
 
 Output format is compatible with CAA/Geometry/evaluate.py so results are
 directly comparable.
@@ -47,9 +59,10 @@ from .topk_sae_model import TopKSparseAutoencoder, get_or_download_sae
 # ──────────────────────────────────────────────────────────────────────────────
 def make_pre_topk_steer_hook(
     sae: TopKSparseAutoencoder,
-    persona_vec: torch.Tensor,   # (d_sae,) — pre-TopK persona direction
+    persona_vec: torch.Tensor,          # (d_sae,) — pre-TopK persona direction
     alpha: float,
     d_in: int,
+    use_delta_correction: bool = True,
 ):
     """
     Pre-TopK steering hook (recommended, matches persona vector computation).
@@ -60,11 +73,26 @@ def make_pre_topk_steer_hook(
         residual  (batch, seq, d_in)
           ↓  sae.pre_encode  [dense, continuous]
         pre       (batch, seq, d_sae)
+
+        [if use_delta_correction]
+          z_u = TopK(pre, k=50)
+          act_recon = sae.decode(z_u)
+          delta = flat - act_recon          ← unsteered reconstruction error
+
           ↓  pre_steered = pre + α · persona_vec
           ↓  TopK(pre_steered, k=50)
         z_steered (batch, seq, d_sae)  — 50 active, value-biased
           ↓  sae.decode
+        recon     (batch, seq, d_in)
+        [if use_delta_correction]
+          recon = recon + delta             ← add reconstruction error back
         residual_steered  (batch, seq, d_in)   ← replaces layer output
+
+    Args:
+        use_delta_correction: When True (default), compute Δ = act − decode(encode(act))
+            from the unsteered pass and add it to the steered reconstruction.
+            This cancels SAE reconstruction error that would otherwise be injected
+            into the residual stream on every forward pass.
 
     Use this when config.use_pre_topk_personas=True (the default).
     """
@@ -76,6 +104,15 @@ def make_pre_topk_steer_hook(
 
         # Compute dense pre-activations (before TopK)
         pre = sae.pre_encode(flat)                             # (batch*seq, d_sae)
+
+        # Δ correction: compute unsteered reconstruction error from this pass
+        if use_delta_correction:
+            topk_vals_u, topk_idx_u = pre.topk(sae.k, dim=-1)
+            z_unsteered = torch.zeros_like(pre)
+            z_unsteered.scatter_(-1, topk_idx_u, topk_vals_u)
+            act_recon = sae.decode(z_unsteered)                # (batch*seq, d_in)
+            delta = flat - act_recon                           # (batch*seq, d_in)
+
         # Inject persona direction in pre-activation space
         pv = persona_vec.to(device=pre.device, dtype=pre.dtype)
         pre_steered = pre + alpha * pv
@@ -85,6 +122,11 @@ def make_pre_topk_steer_hook(
         z_steered.scatter_(-1, topk_idx, topk_vals)
         # Decode → back to dense residual space
         recon = sae.decode(z_steered)                          # (batch*seq, d_in)
+
+        # Add back the reconstruction error to preserve unmodelled information
+        if use_delta_correction:
+            recon = recon + delta
+
         recon = recon.reshape(original_shape).to(dtype)
 
         if isinstance(output, tuple):
@@ -96,9 +138,10 @@ def make_pre_topk_steer_hook(
 
 def make_topk_steer_hook(
     sae: TopKSparseAutoencoder,
-    persona_vec: torch.Tensor,   # (d_sae,) — post-TopK persona direction
+    persona_vec: torch.Tensor,          # (d_sae,) — post-TopK persona direction
     alpha: float,
     d_in: int,
+    use_delta_correction: bool = True,
 ):
     """
     Post-TopK steering hook (legacy, use make_pre_topk_steer_hook instead).
@@ -107,6 +150,12 @@ def make_topk_steer_hook(
     This bypasses the TopK gate, so the value signal cannot change which features
     are selected — it only modulates already-selected features.
     Use this only when config.use_pre_topk_personas=False.
+
+    Args:
+        use_delta_correction: When True (default), compute Δ = act − decode(encode(act))
+            from the unsteered pass and add it to the steered reconstruction.
+            This cancels SAE reconstruction error that would otherwise be injected
+            into the residual stream on every forward pass.
     """
     def hook(module, inp, output):
         hidden = output[0] if isinstance(output, tuple) else output
@@ -116,11 +165,23 @@ def make_topk_steer_hook(
 
         # Encode → sparse space (TopK, k=50)
         z = sae.encode(flat)                                   # (batch*seq, d_sae)
+
+        # Δ correction: unsteered reconstruction error (z is already the
+        # unsteered encoding, so reuse it directly)
+        if use_delta_correction:
+            act_recon = sae.decode(z)                          # (batch*seq, d_in)
+            delta = flat - act_recon                           # (batch*seq, d_in)
+
         # Add persona direction in sparse space
         pv = persona_vec.to(device=z.device, dtype=z.dtype)
         z_steered = z + alpha * pv
         # Decode → back to dense residual space
         recon = sae.decode(z_steered)                          # (batch*seq, d_in)
+
+        # Add back the reconstruction error to preserve unmodelled information
+        if use_delta_correction:
+            recon = recon + delta
+
         recon = recon.reshape(original_shape).to(dtype)
 
         if isinstance(output, tuple):
@@ -334,7 +395,10 @@ def evaluate_sparse_steering(
         )
 
         for alpha in config.alpha_values:
-            hook_fn = hook_factory(sae, persona_vec, alpha, config.d_in)
+            hook_fn = hook_factory(
+                sae, persona_vec, alpha, config.d_in,
+                use_delta_correction=config.use_delta_correction,
+            )
             handle = layer_module.register_forward_hook(hook_fn)
 
             try:

@@ -17,6 +17,9 @@ Instead of hooking the MLP output (as in `SAE/SparseCAA/`), this pipeline hooks 
 | Checkpoint format | `{model_state_dict}` | `{W_enc, W_dec, b_enc, b_dec}` |
 | Fine-tuning loss | MSE + L1 | MSE only (TopK enforces sparsity) |
 | Touche samples/value | 50, from `-v3.csv` | 200, from `-final.csv` (Hedonism: 90) |
+| Persona vector mean | Standard mean | τ-masked non-zero mean (default τ=0.7) |
+| Common feature removal | No | Yes — shared features zeroed before subtraction |
+| Steering correction | None | Δ reconstruction correction (default on) |
 
 ---
 
@@ -40,9 +43,73 @@ finetune  →  extract  →  evaluate  →  geometry
 | Module | Description | GPU required? |
 |---|---|---|
 | `finetune` | Adapt the pre-trained Qwen-Scope SAE to value-specific residual activations. Collects all-token activations into an HDF5 cache, then fine-tunes with MSE loss. | Yes |
-| `extract` | Compute per-value sparse CAA persona vectors (`persona_vec = mean(z_pos) − mean(z_neg)`) in the 65 536-d SAE feature space. | Yes |
-| `evaluate` | Steer the model via the sparse SAE space and measure A/B logit accuracy across alpha values. | Yes |
+| `extract` | Compute per-value sparse CAA persona vectors using τ-masked non-zero mean and optional common-feature removal. | Yes |
+| `evaluate` | Steer the model via the sparse SAE space (with optional Δ reconstruction correction) and measure A/B logit accuracy across alpha values. | Yes |
 | `geometry` | Spearman ρ vs. Schwartz theory, UMAP, t-SNE, MDS circumplex, similarity heatmaps. | No (CPU) |
+
+---
+
+## Persona Vector Extraction Enhancements
+
+### τ Frequency Threshold (`--tau`, default `0.7`)
+
+Instead of a plain mean, persona vectors are computed with a **frequency-masked non-zero mean**:
+
+- Stack all `pre_encode` activations for the positive side into matrix `S_pos` of shape `(N, 65536)`.
+- For each feature `c`: `freq[c] = count(S_pos[:, c] != 0) / N`
+- Feature `c` is included only if `freq[c] >= τ`; otherwise it is zeroed.
+- For included features: `mean_vec[c] = sum(S_pos[:, c]) / count(S_pos[:, c] != 0)` (divide by non-zero rows, not N).
+
+This eliminates features that fired for only 1–2 prompts, reducing noise in the persona vector. Set `--tau 0.0` to recover the original behaviour.
+
+### Common Feature Removal (`--no_remove_common_features` to disable)
+
+After computing `v_pos` and `v_neg` (both `(65536,)` after τ filtering), features that are non-zero in **both** sides are zeroed before the subtraction:
+
+```
+common_mask = (v_pos != 0) & (v_neg != 0)
+v_pos[common_mask] = 0
+v_neg[common_mask] = 0
+persona_vec = v_pos - v_neg
+```
+
+Shared features are likely syntactic or positional artifacts that fire regardless of value polarity. Removing them sharpens the value-discriminative signal.
+
+---
+
+## Steering Mechanism
+
+### Pre-TopK hook (default, `use_pre_topk_personas=True`)
+
+```
+residual  (batch, seq, 4096)
+  ↓  sae.pre_encode  [dense, linear]
+pre       (batch, seq, 65536)
+  ↓  pre_steered = pre + α · persona_vec
+  ↓  TopK(pre_steered, k=50)        ← α biases which 50 features are selected
+z_steered (batch, seq, 65536)
+  ↓  sae.decode
+residual_steered  (batch, seq, 4096)   ← replaces layer output
+```
+
+The hook is registered on `model.model.layers[config.layer]`. Unlike `SparseCAA` (which patches the MLP output), this approach patches the full residual stream, so all downstream layers see the steered representation.
+
+### Δ Reconstruction Correction (`--no_delta_correction` to disable)
+
+By default, the steering hook also corrects for the SAE's inherent reconstruction error:
+
+```
+pre       (batch, seq, 65536)            ← from sae.pre_encode
+z_u     = TopK(pre, k=50)               ← unsteered sparse encoding
+act_recon = sae.decode(z_u)             ← unsteered reconstruction
+delta   = residual - act_recon          ← reconstruction error
+
+[steered path as above → recon]
+
+residual_steered = recon + delta        ← error added back
+```
+
+Without correction, the SAE reconstruction error is injected into the residual stream on every steered forward pass, which can cause erratic behaviour especially in earlier layers. Adding `delta` back preserves the information the SAE cannot reconstruct and keeps the steered output faithful to the original residual.
 
 ---
 
@@ -63,6 +130,10 @@ python -m SAE.QwenScopeCAA.run_pipeline --layer 24 --skip_finetune
 # GPU steps now, geometry later on CPU:
 python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --modules finetune,extract,evaluate
 python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --modules geometry
+
+# Reproduce original behaviour (no tau filtering, no common removal, no delta correction):
+python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --skip_finetune \
+    --tau 0.0 --no_remove_common_features --no_delta_correction
 ```
 
 ### Key CLI arguments
@@ -76,21 +147,27 @@ python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --modules geometry
 | `--model_name` | `Qwen/Qwen3.5-9B-Base` | HuggingFace model ID |
 | `--touche_samples_per_value` | `200` | Max Touche rows added per value |
 | `--alpha` | `0.5,1.0,2.0,4.0` | Steering strengths for evaluation |
+| `--tau` | `0.7` | Frequency threshold τ for feature inclusion in persona mean |
+| `--no_remove_common_features` | off | Disable zeroing of features active in both v_pos and v_neg |
+| `--no_delta_correction` | off | Disable SAE reconstruction-error correction in the steering hook |
 | `--output_dir` | `SAE/QwenScopeCAA/outputs` | Root output directory |
 
 ---
 
 ## Outputs
 
-All outputs are written under `SAE/QwenScopeCAA/outputs/<model>_layer<n>/`:
+All outputs are written under `SAE/QwenScopeCAA/outputs/<model>_layer<n>_k<k>/`:
 
 ```
-pipeline_config.json          # Full run configuration
+pipeline_config.json          # Full run configuration (includes tau, remove_common_features,
+                              #   use_delta_correction)
 activation_cache.h5           # HDF5 activation cache (finetune module)
 sae_finetuned_layer16.pt      # Fine-tuned SAE checkpoint (Qwen-Scope format)
 sparse_vectors/
   *.pt                        # One (65536,) persona vector per Schwartz value
-  value_metadata.json         # Per-value stats (n_train, norm, feature counts)
+  value_metadata.json         # Per-value stats: n_train, norm, feature counts,
+                              #   tau, n_pos/neg_features_above_tau,
+                              #   n_common_features_removed
 evaluation/
   eval_results.json
   baseline_vs_steered_accuracy.png
@@ -112,32 +189,18 @@ rho_comparison.png
 
 ---
 
-## Steering Mechanism
-
-```
-residual  (batch, seq, 4096)
-  ↓  sae.encode  [TopK, k=50]
-z         (batch, seq, 65536)   — sparse feature activations
-  ↓  z_steered = z + α · persona_vec
-  ↓  sae.decode
-residual_steered  (batch, seq, 4096)   ← replaces layer output
-```
-
-The hook is registered on `model.model.layers[config.layer]`. Unlike `SparseCAA` (which patches the MLP output), this approach patches the full residual stream, so all downstream layers see the steered representation.
-
----
-
 ## File Structure
 
 ```
 SAE/QwenScopeCAA/
 ├── __init__.py
 ├── config.py                   # QwenScopePipelineConfig dataclass
+│                               #   (tau, remove_common_features, use_delta_correction)
 ├── topk_sae_model.py           # TopKSparseAutoencoder, load/save/download helpers
 ├── data_loader.py              # load_combined() + re-exports from SparseCAA
 ├── finetune_sae.py             # Residual-stream activation collection + MSE fine-tuning
-├── extract_sparse_vectors.py   # Last-token residual hook + TopK encode → persona vecs
-├── evaluate.py                 # Steering hook + A/B accuracy evaluation
+├── extract_sparse_vectors.py   # τ-masked mean + common removal → persona vecs
+├── evaluate.py                 # Pre-TopK steering hook with Δ correction + A/B evaluation
 ├── geometry.py                 # Thin wrapper over SAE.SparseCAA.geometry
 └── run_pipeline.py             # CLI entry point
 ```

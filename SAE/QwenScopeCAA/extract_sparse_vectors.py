@@ -5,18 +5,24 @@ For each contrastive pair (pos/neg) and each Schwartz value:
   1. Run Qwen forward pass.
   2. Hook model.model.layers[config.layer] — capture the LAST TOKEN residual-
      stream output (output[0][0, -1, :], shape: (4096,)).
-  3. Encode through the SAE:
-       pre = encoder(act)               # (65536,)
-       z = TopK(pre, k=50)              # exactly 50 non-zero values
-  4. Accumulate z for pos and neg prompts separately.
+  3. Encode through the SAE using pre_encode (dense, pre-TopK):
+       pre = encoder(act)               # (65536,) — dense, continuous
+  4. Accumulate pre for pos and neg prompts separately into pos_z / neg_z.
 
-After all pairs for a value:
-  persona_vec[value] = mean(z_pos_list) - mean(z_neg_list)   shape: (65536,)
-
-This is the standard CAA difference vector, computed in the Qwen-Scope
-sparse feature space (residual stream) rather than the dense MLP space.
+After all pairs for a value (three sequential steps):
+  Step 2 — τ frequency-masked non-zero mean (config.tau):
+       v_pos[c] = mean of pos_z[:, c] over non-zero rows  if freq_pos[c] ≥ τ
+               = 0                                         otherwise
+       (same for v_neg)
+  Step 3 — common feature removal (config.remove_common_features):
+       Features non-zero in BOTH v_pos and v_neg are zeroed on both sides.
+       These are likely syntactic/positional artifacts shared across all values.
+  Step 4 — difference vector:
+       persona_vec[value] = v_pos - v_neg          shape: (65536,)
 
 Results are cached to disk; already-computed values are loaded from cache.
+Metadata (including tau, feature counts above threshold, and common-feature
+removal count) is written to value_metadata.json.
 """
 from __future__ import annotations
 
@@ -56,6 +62,42 @@ def _load_cached(config: QwenScopePipelineConfig) -> Dict[str, torch.Tensor]:
 
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Frequency-masked mean
+# ──────────────────────────────────────────────────────────────────────────────
+def _tau_mean(z_list: List[torch.Tensor], tau: float) -> torch.Tensor:
+    """
+    Frequency-masked non-zero mean over a list of feature vectors.
+
+    For each feature dimension c:
+      freq[c] = count(z_i[c] != 0) / N
+      If freq[c] >= tau  →  mean_vec[c] = sum_i(z_i[c]) / count(z_i[c] != 0)
+      If freq[c] <  tau  →  mean_vec[c] = 0
+
+    When tau=0.0 all features are retained and the result equals the
+    non-zero-row mean (sum divided by non-zero count, not by N).  For the
+    default dense pre-TopK case every entry is non-zero, so this is numerically
+    identical to torch.stack(z_list).mean(dim=0) when tau ≤ 1.0.
+
+    Args:
+        z_list : list of N tensors, each of shape (d_sae,)
+        tau    : frequency threshold in [0, 1]
+
+    Returns:
+        mean_vec : (d_sae,) float32 tensor with below-tau features zeroed.
+    """
+    S = torch.stack(z_list)                         # (N, d_sae)
+    N = S.shape[0]
+    nonzero_counts = (S != 0).float().sum(dim=0)    # (d_sae,)
+    freq = nonzero_counts / N                        # (d_sae,)
+    mask = freq >= tau                               # (d_sae,) bool
+    col_sums = S.sum(dim=0)                         # (d_sae,)
+    safe_counts = nonzero_counts.clamp(min=1.0)     # avoid division by zero
+    nz_mean = col_sums / safe_counts                # (d_sae,)
+    nz_mean = nz_mean * mask.float()                # zero below-tau features
+    return nz_mean
+
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Public entry point
 # ──────────────────────────────────────────────────────────────────────────────
 def extract_sparse_vectors(
@@ -71,9 +113,17 @@ def extract_sparse_vectors(
     Already-computed vectors are loaded from cache; only missing values are
     (re-)computed.
 
+    Extraction applies three sequential steps controlled by config fields:
+      1. Collect pre_encode activations for all training pairs.
+      2. _tau_mean (config.tau): non-zero mean, zeroing features that fired in
+         fewer than tau*N samples on either side.
+      3. Common removal (config.remove_common_features): zero features active in
+         both v_pos and v_neg before subtraction.
+      4. Difference: persona_vec = v_pos − v_neg.
+
     Returns:
-        {value: tensor of shape (d_sae,)}  — one float32 sparse persona vector
-        per Schwartz value.
+        {value: tensor of shape (d_sae,)}  — one float32 persona vector per
+        Schwartz value, with tau-filtered and common features zeroed as configured.
     """
     os.makedirs(config.sparse_vectors_dir, exist_ok=True)
 
@@ -173,9 +223,26 @@ def extract_sparse_vectors(
                 z_neg = encode_fn(_current["act"])    # (d_sae,)
                 neg_z.append(z_neg.detach())
 
-            pos_mean = torch.stack(pos_z).mean(dim=0)
-            neg_mean = torch.stack(neg_z).mean(dim=0)
-            vec = pos_mean - neg_mean   # (d_sae,) persona vector
+            # Step 2 — τ frequency-masked non-zero mean
+            v_pos = _tau_mean(pos_z, config.tau)    # (d_sae,)
+            v_neg = _tau_mean(neg_z, config.tau)    # (d_sae,)
+
+            # Record tau survivors before common removal
+            n_pos_above_tau = int((v_pos != 0).sum().item())
+            n_neg_above_tau = int((v_neg != 0).sum().item())
+
+            # Step 3 — common feature removal
+            n_common = 0
+            if config.remove_common_features:
+                common_mask = (v_pos != 0) & (v_neg != 0)
+                n_common = int(common_mask.sum().item())
+                v_pos = v_pos.clone()
+                v_neg = v_neg.clone()
+                v_pos[common_mask] = 0.0
+                v_neg[common_mask] = 0.0
+
+            # Step 4 — difference vector
+            vec = v_pos - v_neg                     # (d_sae,) persona vector
 
             torch.save(vec, cache_p)
             vectors[val] = vec
@@ -185,12 +252,19 @@ def extract_sparse_vectors(
                 "vec_norm": float(vec.norm().item()),
                 "n_positive_features": int((vec > 0).sum().item()),
                 "n_negative_features": int((vec < 0).sum().item()),
+                "tau": config.tau,
+                "n_pos_features_above_tau": n_pos_above_tau,
+                "n_neg_features_above_tau": n_neg_above_tau,
+                "n_common_features_removed": n_common,
             }
             print(
                 f"  {val}: n={len(pairs)}, "
                 f"norm={vec.norm():.4f}, "
                 f"+feats={(vec > 0).sum()}, "
-                f"-feats={(vec < 0).sum()}"
+                f"-feats={(vec < 0).sum()}, "
+                f"tau_pos={n_pos_above_tau}, "
+                f"tau_neg={n_neg_above_tau}, "
+                f"common_removed={n_common}"
             )
 
     finally:
