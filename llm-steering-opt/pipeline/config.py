@@ -116,6 +116,9 @@ class SteeringConfig:
     n_training_samples: Optional[int] = None
 
     # ── Evaluation ────────────────────────────────────────────────────────
+    # ``full_logprob``: mean token logprob of positive vs negative completion.
+    # ``ab_next_token``: CAA-style P(A) vs P(B) on MCQ prompt (comparable to CAA).
+    eval_metric: str = "full_logprob"
     # Max validation samples per value for steering evaluation (None = all available)
     n_eval_samples: Optional[int] = None
 
@@ -129,6 +132,10 @@ class SteeringConfig:
 
     def __post_init__(self):
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
+        if self.eval_metric not in ("full_logprob", "ab_next_token"):
+            raise ValueError(
+                f"eval_metric must be 'full_logprob' or 'ab_next_token', got {self.eval_metric!r}"
+            )
 
     def get_dtype(self):
         import torch

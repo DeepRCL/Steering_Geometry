@@ -306,6 +306,8 @@ class SchwartzColdPipeline:
             layer_idx=best_layer,
             method=self.config.method,
             eta=self.config.eta,
+            eval_metric=self.config.eval_metric,
+            model_name=self.config.model_name,
             n_eval_samples=self.config.n_eval_samples,
             seed=self.config.random_seed,
             use_chat_template=self.config.use_chat_template,

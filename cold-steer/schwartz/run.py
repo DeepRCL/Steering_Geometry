@@ -30,8 +30,11 @@ import sys
 
 _THIS_DIR = os.path.dirname(__file__)
 _COLD_STEER_ROOT = os.path.dirname(_THIS_DIR)
+_REPO_ROOT = os.path.abspath(os.path.join(_COLD_STEER_ROOT, ".."))
 if _COLD_STEER_ROOT not in sys.path:
     sys.path.insert(0, _COLD_STEER_ROOT)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
 from schwartz.config import SchwartzColdConfig
 from schwartz.pipeline import SchwartzColdPipeline
@@ -93,6 +96,13 @@ def parse_args() -> argparse.Namespace:
                         "validation. cold-steer's paper uses ~50.")
 
     # Evaluation
+    p.add_argument(
+        "--eval_metric",
+        type=str,
+        default=SchwartzColdConfig.eval_metric,
+        choices=["full_logprob", "ab_next_token"],
+        help="Steering eval: full-answer logprob or CAA-style A/B next-token",
+    )
     p.add_argument("--n_eval_samples", type=int, default=SchwartzColdConfig.n_eval_samples,
                    help="Validation samples per value. Use -1 (or 0) to evaluate on "
                         "ALL remaining val rows for each value.")
@@ -131,6 +141,7 @@ def main() -> None:
         steer_masking=args.steer_masking,
         gen_masking=args.gen_masking,
         n_training_samples=args.n_training_samples,
+        eval_metric=args.eval_metric,
         n_eval_samples=args.n_eval_samples,
         output_dir=args.output_dir,
         save_vectors=not args.no_save_vectors,
