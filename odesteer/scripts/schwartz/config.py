@@ -114,20 +114,55 @@ def get_rows_for_value(rows: List[dict], value: str) -> List[dict]:
 
 # ─── Prompt Formatting ──────────────────────────────────────────────────────
 
-def format_qa_prompt(question: str, answer: str) -> str:
-    """Format a question + answer into a full Q/A text for activation extraction.
+def format_qa_prompt(
+    question: str,
+    answer: str,
+    tokenizer=None,
+    use_chat_template: bool = True,
+) -> str:
+    """Format a question + answer into a full text for activation extraction.
 
-    This matches ODESteer's `extract_base_activations` pattern:
-        full_prompts = [f'Q: {q}\\nA: {a}' for q, a in zip(questions, answers)]
+    For instruct models (when ``use_chat_template`` is ``True`` and the
+    tokenizer exposes a ``chat_template``), the question is rendered through
+    the chat template with ``add_generation_prompt=True`` so the train-time
+    activation distribution matches the CAA-aligned A/B eval prompt (which
+    also wraps the question in the chat template). The answer is appended
+    as the assistant continuation, matching ``cold-steer``'s training setup.
+
+    Falls back to ODESteer's original ``f"Q: {q}\\nA: {a}"`` format when no
+    chat template is available (e.g. Qwen3.5-9B-Base).
     """
+    if use_chat_template and tokenizer is not None and getattr(tokenizer, "chat_template", None):
+        try:
+            base = tokenizer.apply_chat_template(
+                [{"role": "user", "content": question}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            return f"{base} {answer}"
+        except Exception:
+            pass
     return f"Q: {question}\nA: {answer}"
 
 
-def format_question_prompt(question: str) -> str:
-    """Format just the question for compute_answer_prob.
+def format_question_prompt(
+    question: str,
+    tokenizer=None,
+    use_chat_template: bool = True,
+) -> str:
+    """Format just the question. Uses the chat template for instruct models.
 
-    Matches ODESteer's prompt_template default: 'Q: {question}\\nA: '
+    Falls back to ODESteer's default ``"Q: {question}\\nA: "`` template.
     """
+    if use_chat_template and tokenizer is not None and getattr(tokenizer, "chat_template", None):
+        try:
+            return tokenizer.apply_chat_template(
+                [{"role": "user", "content": question}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+        except Exception:
+            pass
     return f"Q: {question}\nA: "
 
 

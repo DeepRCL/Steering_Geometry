@@ -218,7 +218,12 @@ class SchwartzColdPipeline:
             .replace("-", "_")
         )
 
-    def save_vectors(self, vectors: Dict[str, torch.Tensor], layer: int) -> None:
+    def save_vectors(
+        self,
+        vectors: Dict[str, torch.Tensor],
+        layer: int,
+        steerers_by_value: Optional[Dict[str, method_adapters.Steerer]] = None,
+    ) -> None:
         vec_dir = os.path.join(self.config.output_dir, "vectors")
         os.makedirs(vec_dir, exist_ok=True)
         manifest = {}
@@ -226,6 +231,12 @@ class SchwartzColdPipeline:
             safe = self._sanitize_filename(value)
             vec_path = os.path.join(vec_dir, f"{safe}.pt")
             torch.save(vector.detach().cpu(), vec_path)
+            steerer_file = f"{safe}_steerer.pt"
+            if steerers_by_value and value in steerers_by_value:
+                method_adapters.save_steerer_checkpoint(
+                    steerers_by_value[value],
+                    os.path.join(vec_dir, steerer_file),
+                )
             meta = {
                 "value": value,
                 "layer": layer,
@@ -236,6 +247,7 @@ class SchwartzColdPipeline:
                 "eta": self.config.eta,
                 "training_mode": self.config.training_mode,
                 "n_training_samples": self.config.n_training_samples,
+                "eval_metric": self.config.eval_metric,
             }
             if self.config.method == "cold_fd":
                 meta["epsilon"] = self.config.epsilon
@@ -243,15 +255,120 @@ class SchwartzColdPipeline:
                 meta["kernel"] = self.config.kernel
             with open(os.path.join(vec_dir, f"{safe}.json"), "w") as f:
                 json.dump(meta, f, indent=2)
-            manifest[value] = {
+            entry = {
                 "vector_file": f"{safe}.pt",
                 "metadata_file": f"{safe}.json",
                 "layer": layer,
                 "norm": round(float(vector.norm().item()), 4),
             }
+            if steerers_by_value and value in steerers_by_value:
+                entry["steerer_file"] = steerer_file
+            manifest[value] = entry
         with open(os.path.join(vec_dir, "manifest.json"), "w") as f:
             json.dump(manifest, f, indent=2)
         self._log(f"Saved {len(vectors)} vectors to {vec_dir}/")
+
+    def _cache_meta_matches(self, meta: dict, layer: int) -> bool:
+        """True if saved metadata matches the current run configuration."""
+        checks = [
+            ("model_name", self.config.model_name),
+            ("method", self.config.method),
+            ("layer", layer),
+            ("eta", self.config.eta),
+            ("training_mode", self.config.training_mode),
+            ("n_training_samples", self.config.n_training_samples),
+            ("eval_metric", self.config.eval_metric),
+        ]
+        for key, expected in checks:
+            if key not in meta:
+                if key == "eval_metric":
+                    continue
+                return False
+            if meta.get(key) != expected:
+                return False
+        if self.config.method == "cold_fd":
+            return meta.get("epsilon") == self.config.epsilon
+        return meta.get("kernel") == self.config.kernel
+
+    def try_load_cached_training(
+        self, layer_idx: int
+    ) -> Optional[Tuple[Dict[str, torch.Tensor], Dict[str, Any], Dict[str, method_adapters.Steerer]]]:
+        """Load vectors (+ steerers when checkpoints exist) and skip training."""
+        assert self.steerable_llm is not None
+        vec_dir = os.path.join(self.config.output_dir, "vectors")
+        manifest_path = os.path.join(vec_dir, "manifest.json")
+        if not os.path.isfile(manifest_path):
+            return None
+
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+        vectors: Dict[str, torch.Tensor] = {}
+        steerers_by_value: Dict[str, method_adapters.Steerer] = {}
+        vector_only_values: List[str] = []
+
+        for value, info in manifest.items():
+            meta_path = os.path.join(vec_dir, info["metadata_file"])
+            if not os.path.isfile(meta_path):
+                self._log(f"  Cache miss: missing metadata for {value}")
+                return None
+            with open(meta_path) as f:
+                meta = json.load(f)
+            if not self._cache_meta_matches(meta, layer_idx):
+                self._log(f"  Cache miss: config mismatch for {value}")
+                return None
+
+            vec_path = os.path.join(vec_dir, info["vector_file"])
+            if not os.path.isfile(vec_path):
+                self._log(f"  Cache miss: missing vector for {value}")
+                return None
+            vectors[value] = torch.load(vec_path, map_location="cpu", weights_only=True)
+
+            steerer_path = os.path.join(
+                vec_dir, info.get("steerer_file", "")
+            )
+            if info.get("steerer_file") and os.path.isfile(steerer_path):
+                steerer = method_adapters.make_steerer(
+                    method=self.config.method,
+                    steerable_llm=self.steerable_llm,
+                    epsilon=self.config.epsilon,
+                    eta=self.config.eta,
+                    training=self.config.training_mode,
+                    steer_masking=self.config.steer_masking,
+                    gen_masking=self.config.gen_masking,
+                    training_batch_size=self.config.training_batch_size,
+                    kernel=self.config.kernel,
+                    log_dir=self.config.output_dir,
+                )
+                method_adapters.load_steerer_checkpoint(steerer, steerer_path)
+                method_adapters.offload_steerer_state(steerer)
+                steerers_by_value[value] = steerer
+            else:
+                vector_only_values.append(value)
+                steerers_by_value[value] = method_adapters.VectorSteerProxy(
+                    vectors[value], self.config.eta, layer_idx
+                )
+
+        if not vectors:
+            return None
+
+        train_info: Dict[str, Any] = {}
+        ti_path = os.path.join(self.config.output_dir, "training_info.json")
+        if os.path.isfile(ti_path):
+            with open(ti_path) as f:
+                train_info = json.load(f)
+
+        self._log(f"  Loaded {len(vectors)} cached vectors from {vec_dir}/")
+        if vector_only_values:
+            self._log(
+                f"  WARNING: no steerer checkpoints for {len(vector_only_values)} "
+                f"values — eval uses additive η·vector fallback (not identical to "
+                f"cold-steer FD/kernel hooks). Re-run training once to save "
+                f"{{value}}_steerer.pt checkpoints."
+            )
+        else:
+            self._log("  Loaded steerer checkpoints — skipping training")
+        return vectors, train_info, steerers_by_value
 
     # ── Run dir naming (mirrors llm-steering-opt) ────────────────────────
 
@@ -270,6 +387,8 @@ class SchwartzColdPipeline:
             parts.append(f"kernel_{self.config.kernel}")
         parts.append(f"layer_{layer}")
         parts.append(f"n_train_{self.config.n_training_samples}")
+        eval_slug = self.config.eval_metric.replace("_", "-")
+        parts.append(f"eval_{eval_slug}")
         return os.path.join(model_short, "-".join(parts))
 
     # ── Full pipeline ────────────────────────────────────────────────────
@@ -294,9 +413,19 @@ class SchwartzColdPipeline:
             with open(os.path.join(self.config.output_dir, "layer_sweep.json"), "w") as f:
                 json.dump(sweep_payload, f, indent=2)
 
-        vectors, train_info, steerers_by_value = self.train_vectors(best_layer)
-        if self.config.save_vectors:
-            self.save_vectors(vectors, best_layer)
+        method_adapters.set_steering_layers(self.steerable_llm, [best_layer])
+
+        cached = (
+            None
+            if self.config.force_retrain
+            else self.try_load_cached_training(best_layer)
+        )
+        if cached is not None:
+            vectors, train_info, steerers_by_value = cached
+        else:
+            vectors, train_info, steerers_by_value = self.train_vectors(best_layer)
+            if self.config.save_vectors:
+                self.save_vectors(vectors, best_layer, steerers_by_value)
 
         eval_metrics = eval_mod.evaluate_steerer(
             steerable_llm=self.steerable_llm,

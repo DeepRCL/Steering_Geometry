@@ -51,6 +51,21 @@ from .config import (
 )
 from . import data_utils
 
+# ─── Plotting Constants ──────────────────────────────────────────────────────
+PLOT_LABEL_FONTSIZE = 13
+PLOT_TITLE_FONTSIZE = 18
+PLOT_AXIS_FONTSIZE = 12
+PLOT_LEGEND_FONTSIZE = 13
+PLOT_ANNOTATION_FONTSIZE = 9
+PLOT_SCATTER_SIZE = 150
+PLOT_MARKER_SIZE = 12
+PLOT_MARKER_RADIUS = 0.055
+EMBEDDING_FIGURE_SIZE = (14, 11)
+HEATMAP_FIGURE_SIZE = (14, 12)
+MDS_FIGURE_SIZE = (15, 15)
+SCATTER_FIGURE_SIZE = (8, 5)
+DIFFERENCE_HEATMAP_SIZE = (12, 10)
+
 BOUNDARY_GROUPS = {
     "Hedonism": ("Openness to Change", "Self-Enhancement"),
     "Face": ("Self-Enhancement", "Conservation"),
@@ -78,6 +93,13 @@ class SteeringPipeline:
         self.train_rows: List[dict] = []
         self.val_rows: List[dict] = []
         self.values: List[str] = []
+
+    # ─── Plotting Helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _short_value_label(value: str) -> str:
+        """Extract short label from value name (after ':' if present)."""
+        return value.split(":")[-1].strip() if ":" in value else value
 
     # ─── Model Loading ───────────────────────────────────────────────────
 
@@ -390,35 +412,28 @@ class SteeringPipeline:
         hook_infos: Optional[list] = None,
     ) -> float:
         """
-        Compute the mean per-token log-probability of `completion` given
-        `prompt`, autoregressively. This matches the CAA/SparseCAA/QwenScopeCAA
-        full-answer metric and ensures hooks affect each next-token prediction.
+        Mean per-token logprob of ``completion`` given ``prompt`` (ODESteer eval).
 
-        Returns:
-            Mean log-prob per completion token (higher = model assigns more
-            probability mass to this completion).
+        Single forward on ``prompt + completion``; hooks apply to the full pass.
         """
-        completion_text = " " + completion.lstrip()
-        prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=True)
-        completion_ids = self.tokenizer.encode(completion_text, add_special_tokens=False)
-        if not completion_ids:
-            return 0.0
-
         device = next(self.model.parameters()).device
-        prefix_ids = list(prompt_ids)
-        per_token_lps = []
-
-        for token_id in completion_ids:
-            input_ids = torch.tensor([prefix_ids], device=device)
-            if hook_infos:
-                with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
-                    logits = self.model(input_ids).logits[0, -1, :]
-            else:
-                logits = self.model(input_ids).logits[0, -1, :]
-            per_token_lps.append(F.log_softmax(logits, dim=-1)[token_id].item())
-            prefix_ids.append(token_id)
-
-        return float(np.mean(per_token_lps)) if per_token_lps else 0.0
+        full_inputs, prompt_len, answer_ids = schwartz_eval.prepare_qa_completion_inputs(
+            self.tokenizer, prompt, completion, device
+        )
+        if hook_infos:
+            with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
+                outputs = self.model(
+                    input_ids=full_inputs.input_ids,
+                    attention_mask=full_inputs.get("attention_mask"),
+                )
+        else:
+            outputs = self.model(
+                input_ids=full_inputs.input_ids,
+                attention_mask=full_inputs.get("attention_mask"),
+            )
+        return schwartz_eval.mean_completion_logprob_from_logits(
+            outputs.logits[0], prompt_len, answer_ids
+        )
 
     @torch.no_grad()
     def _score_ab_next_token(
@@ -426,8 +441,8 @@ class SteeringPipeline:
         row: dict,
         hook_infos: Optional[list] = None,
     ) -> dict:
-        pos_is_a = schwartz_eval.stable_pos_is_a(row, self.config.random_seed)
-        prompt = schwartz_eval.format_ab_eval_prompt(
+        pos_is_a = schwartz_eval.eval_pos_is_a(row, self.config.random_seed)
+        tokens, a_token_id, b_token_id = schwartz_eval.format_ab_eval_tokens(
             row["question"],
             row["positive_answer"],
             row["negative_answer"],
@@ -435,9 +450,7 @@ class SteeringPipeline:
             self.tokenizer,
             self.config.model_name,
         )
-        tokens = self.tokenizer.encode(prompt, add_special_tokens=True)
         input_ids = torch.tensor([tokens], device=self.config.device)
-        a_token_id, b_token_id = schwartz_eval.ab_token_ids(self.tokenizer)
 
         if hook_infos:
             with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
@@ -476,6 +489,11 @@ class SteeringPipeline:
         records: List[dict] = []
         eval_values = [v for v in self.values if v in vectors]
 
+        if use_ab:
+            schwartz_eval.assign_pos_is_a_caa(
+                self.val_rows, SCHWARTZ_CIRCUMPLEX_ORDER, self.config.random_seed
+            )
+
         for value in eval_values:
             vec = vectors[value].detach().to(self.config.device)
             scaled_vec = alpha * vec
@@ -512,11 +530,10 @@ class SteeringPipeline:
                         "ab_correct_steer": ab_steer["is_correct"],
                     })
                 else:
-                    prompt = data_utils.format_prompt(
+                    prompt = schwartz_eval.format_qa_eval_prompt(
                         row["question"],
-                        self.tokenizer,
-                        self.config.use_chat_template,
-                        self.config.prompt_template,
+                        tokenizer=self.tokenizer,
+                        model_name=self.config.model_name,
                     )
                     pos = row["positive_answer"]
                     neg = row["negative_answer"]
@@ -688,6 +705,7 @@ class SteeringPipeline:
 
     @staticmethod
     def _group_legend_handles():
+        """Create legend handles for higher-order groups."""
         return [
             Line2D(
                 [0],
@@ -705,6 +723,7 @@ class SteeringPipeline:
 
     @classmethod
     def _add_group_legend(cls, ax) -> None:
+        """Add group legend to axes."""
         legend = ax.legend(
             handles=cls._group_legend_handles(),
             loc="upper right",
@@ -712,7 +731,7 @@ class SteeringPipeline:
             framealpha=0.94,
             facecolor="white",
             edgecolor="lightgray",
-            fontsize=12,
+            fontsize=PLOT_LEGEND_FONTSIZE,
             borderpad=0.5,
             labelspacing=0.45,
             handletextpad=0.6,
@@ -720,7 +739,8 @@ class SteeringPipeline:
         ax.add_artist(legend)
 
     @staticmethod
-    def _draw_value_marker(ax, x: float, y: float, value: str, radius: float = 0.055) -> None:
+    def _draw_value_marker(ax, x: float, y: float, value: str, radius: float = PLOT_MARKER_RADIUS) -> None:
+        """Draw a value marker (circle or split wedge for boundary values)."""
         if value in BOUNDARY_GROUPS:
             left_group, right_group = BOUNDARY_GROUPS[value]
             ax.add_patch(Wedge((x, y), radius, 90, 270, facecolor=GROUP_COLORS[left_group], edgecolor="none", zorder=3))
@@ -740,29 +760,29 @@ class SteeringPipeline:
             )
         )
 
-    @staticmethod
-    def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
+    @classmethod
+    def _plot_embedding_2d(cls, out_path: str, title: str, coords: np.ndarray):
         """Scatter plot of a 2-D embedding, coloured by Schwartz higher-order group."""
-        plt.figure(figsize=(14, 11))
+        plt.figure(figsize=EMBEDDING_FIGURE_SIZE)
         for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
             group = value_to_group(val)
             color = GROUP_COLORS.get(group, "black")
-            plt.scatter(coords[i, 0], coords[i, 1], c=color, s=150, edgecolors="white", linewidths=1.2)
+            plt.scatter(coords[i, 0], coords[i, 1], c=color, s=PLOT_SCATTER_SIZE, edgecolors="white", linewidths=1.2)
             plt.annotate(
-                val.split(":")[-1].strip(),
+                cls._short_value_label(val),
                 (coords[i, 0], coords[i, 1]),
                 xytext=(7, 7),
                 textcoords="offset points",
-                fontsize=13,
+                fontsize=PLOT_LABEL_FONTSIZE,
                 fontweight="semibold",
                 color=color,
                 bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.75),
             )
 
-        plt.legend(handles=SteeringPipeline._group_legend_handles(), loc="best", fontsize=13)
-        plt.title(title, fontsize=18)
-        plt.xticks(fontsize=12)
-        plt.yticks(fontsize=12)
+        plt.legend(handles=cls._group_legend_handles(), loc="best", fontsize=PLOT_LEGEND_FONTSIZE)
+        plt.title(title, fontsize=PLOT_TITLE_FONTSIZE)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE)
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(out_path, dpi=300)
         plt.close()
@@ -851,16 +871,16 @@ class SteeringPipeline:
         # ── 4. Heatmaps ──────────────────────────────────────────────
 
         # 4a. Original empirical heatmap (fixed range [-1, 1])
-        plt.figure(figsize=(14, 12))
+        plt.figure(figsize=HEATMAP_FIGURE_SIZE)
         sns.heatmap(
             empirical_sim,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             cmap="coolwarm", vmin=-1, vmax=1,
         )
-        plt.title("Empirical Cosine Similarities", fontsize=18)
-        plt.xticks(fontsize=10, rotation=45, ha="right")
-        plt.yticks(fontsize=10)
+        plt.title("Empirical Cosine Similarities", fontsize=PLOT_TITLE_FONTSIZE)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap.png"), dpi=300)
         plt.close()
@@ -871,7 +891,7 @@ class SteeringPipeline:
         vmin_auto = off_diag_vals.min()
         vmax_auto = off_diag_vals.max()
 
-        plt.figure(figsize=(14, 12))
+        plt.figure(figsize=HEATMAP_FIGURE_SIZE)
         sns.heatmap(
             empirical_sim,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
@@ -882,10 +902,10 @@ class SteeringPipeline:
         plt.title(
             f"Empirical Cosine Similarities (contrast-enhanced)\n"
             f"color range: [{vmin_auto:.3f}, {vmax_auto:.3f}]",
-            fontsize=18,
+            fontsize=PLOT_TITLE_FONTSIZE,
         )
-        plt.xticks(fontsize=10, rotation=45, ha="right")
-        plt.yticks(fontsize=10)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_enhanced.png"), dpi=300)
         plt.close()
@@ -896,7 +916,7 @@ class SteeringPipeline:
         rank_matrix[off_diag_mask] = rank_vals / rank_vals.max()  # normalize to [0,1]
         np.fill_diagonal(rank_matrix, 1.0)  # diagonal = max similarity
 
-        plt.figure(figsize=(14, 12))
+        plt.figure(figsize=HEATMAP_FIGURE_SIZE)
         sns.heatmap(
             rank_matrix,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
@@ -904,23 +924,23 @@ class SteeringPipeline:
             cmap="coolwarm",
             vmin=0, vmax=1,
         )
-        plt.title("Empirical Similarity (rank-transformed, 0=least similar, 1=most)", fontsize=18)
-        plt.xticks(fontsize=10, rotation=45, ha="right")
-        plt.yticks(fontsize=10)
+        plt.title("Empirical Similarity (rank-transformed, 0=least similar, 1=most)", fontsize=PLOT_TITLE_FONTSIZE)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_ranked.png"), dpi=300)
         plt.close()
 
-        plt.figure(figsize=(14, 12))
+        plt.figure(figsize=HEATMAP_FIGURE_SIZE)
         sns.heatmap(
             theoretical_sim,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             cmap="coolwarm", vmin=-1, vmax=1,
         )
-        plt.title("Theoretical Relationships", fontsize=18)
-        plt.xticks(fontsize=10, rotation=45, ha="right")
-        plt.yticks(fontsize=10)
+        plt.title("Theoretical Relationships", fontsize=PLOT_TITLE_FONTSIZE)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "theoretical_similarity_heatmap.png"), dpi=300)
         plt.close()
@@ -1083,49 +1103,55 @@ class SteeringPipeline:
             json.dump(geometry_metrics, f, indent=2)
 
         # ── 8. MDS circumplex overlay plot ────────────────────────────
-        plt.figure(figsize=(15, 15))
+        plt.figure(figsize=MDS_FIGURE_SIZE)
         ax = plt.gca()
+        # Draw theoretical unit circle
         ax.add_patch(Circle((0, 0), 1, color="lightgray", fill=False, linestyle="--"))
 
         for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
+            # Theoretical position on circle
             tx, ty = X_circle[i]
             ax.plot(tx, ty, "x", color="gray", markersize=9)
 
+            # Empirical position from MDS
             ex, ey = X_mds_aligned[i]
             group = value_to_group(val)
             color = GROUP_COLORS.get(group, "black")
 
+            # Draw value marker at empirical position
             self._draw_value_marker(ax, ex, ey, val)
+            # Draw line connecting theoretical to empirical
             ax.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
 
-            label = val.split(":")[-1].strip()
+            # Annotate with short label
             ax.annotate(
-                label,
+                self._short_value_label(val),
                 (ex, ey),
                 xytext=(8, 8),
                 textcoords="offset points",
-                fontsize=13,
+                fontsize=PLOT_LABEL_FONTSIZE,
                 fontweight="semibold",
                 color=color,
                 bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
             )
 
         self._add_group_legend(ax)
-        plt.title("2D MDS Aligned to Theoretical Circumplex", fontsize=18)
+        plt.title("2D MDS Aligned to Theoretical Circumplex", fontsize=PLOT_TITLE_FONTSIZE)
         plt.axis("equal")
+        # Set limits clearly showing unit circle
         scale = np.max(np.abs(X_mds_aligned))
         lim = max(1.2, scale * 1.2)
         plt.xlim(-lim, lim)
         plt.ylim(-lim, lim)
         plt.grid(alpha=0.2)
-        plt.xticks(fontsize=12)
-        plt.yticks(fontsize=12)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE)
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "mds_circumplex.png"), dpi=300)
         plt.close()
 
         # ── 9. Theory vs empirical scatter ────────────────────────────
-        plt.figure(figsize=(8, 5))
+        plt.figure(figsize=SCATTER_FIGURE_SIZE)
         jitter = np.random.default_rng(self.config.random_seed).normal(
             0.0, 0.03, size=len(theo_flat)
         )
@@ -1140,7 +1166,7 @@ class SteeringPipeline:
         plt.close()
 
         # ── 10. Difference heatmap ────────────────────────────────────
-        plt.figure(figsize=(12, 10))
+        plt.figure(figsize=DIFFERENCE_HEATMAP_SIZE)
         sns.heatmap(
             empirical_sim - theoretical_sim,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
@@ -1168,7 +1194,7 @@ class SteeringPipeline:
 
         Directory layout::
 
-            {output_dir}/{model_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}/vectors/
+            {output_dir}/{model_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}-eval_{metric}/vectors/
                 manifest.json
                 {value_name}.pt
                 {value_name}.json
@@ -1364,19 +1390,21 @@ class SteeringPipeline:
         """
         Hierarchical run directory::
 
-            {model_short_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}
+            {model_short_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}-eval_{metric}
 
         Example::
 
-            Qwen3.5-9B-Base/lr_0p01-alpha_40p0-layer_22-max_iter_30-train_ratio_0p005
+            Qwen3.5-9B-Base/lr_0p01-alpha_40p0-layer_22-max_iter_30-train_ratio_0p005-eval_full_logprob
         """
         model_short = self.config.model_name.split("/")[-1].replace(" ", "_")
         lr_slug = str(self.config.lr).replace(".", "p").replace("-", "neg")
         alpha_slug = str(self.config.alpha).replace(".", "p").replace("-", "neg")
+        eval_slug = self.config.eval_metric.replace("_", "-")
         run_name = (
             f"lr_{lr_slug}-alpha_{alpha_slug}-layer_{layer}-"
             f"max_iter_{self.config.max_iters}-"
-            f"train_ratio_{str(self.config.train_ratio).replace('.', 'p')}"
+            f"train_ratio_{str(self.config.train_ratio).replace('.', 'p')}-"
+            f"eval_{eval_slug}"
         )
         return os.path.join(model_short, run_name)
 

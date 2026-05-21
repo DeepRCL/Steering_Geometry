@@ -133,14 +133,24 @@ def extract_activations(
     """
     Extract pos/neg activations using HuggingFaceLM.extract_prompt_eos_activations().
 
-    This matches ODESteer's data/truthfulqa/extract_activations.py exactly.
+    For instruct models, the question is wrapped in the tokenizer's chat
+    template before the answer is appended so the activation distribution
+    matches the CAA-aligned A/B eval prompt (which also uses the chat
+    template). For base models we fall back to plain ``Q: ...\\nA: ...``.
     """
     if n_samples is not None and n_samples < len(rows):
         rng = random.Random(seed)
         rows = rng.sample(rows, n_samples)
 
-    pos_prompts = [config.format_qa_prompt(r["question"], r["positive_answer"]) for r in rows]
-    neg_prompts = [config.format_qa_prompt(r["question"], r["negative_answer"]) for r in rows]
+    tokenizer = hf_lm.tokenizer
+    pos_prompts = [
+        config.format_qa_prompt(r["question"], r["positive_answer"], tokenizer=tokenizer)
+        for r in rows
+    ]
+    neg_prompts = [
+        config.format_qa_prompt(r["question"], r["negative_answer"], tokenizer=tokenizer)
+        for r in rows
+    ]
 
     pos_X = hf_lm.extract_prompt_eos_activations(pos_prompts, layer_idx).cpu().float()
     neg_X = hf_lm.extract_prompt_eos_activations(neg_prompts, layer_idx).cpu().float()
@@ -309,9 +319,9 @@ def _score_ab_next_token(
     steer_T: float,
     steer: bool = False,
 ) -> dict:
-    """CAA-style P(A) vs P(B) at the last prompt position."""
-    pos_is_a = schwartz_eval.stable_pos_is_a(row, seed)
-    prompt = schwartz_eval.format_ab_eval_prompt(
+    """CAA Geometry ``_score_instance``: P(A) vs P(B) at last prompt position."""
+    pos_is_a = schwartz_eval.eval_pos_is_a(row, seed)
+    tokens, a_id, b_id = schwartz_eval.format_ab_eval_tokens(
         row["question"],
         row["positive_answer"],
         row["negative_answer"],
@@ -319,19 +329,16 @@ def _score_ab_next_token(
         hf_lm.tokenizer,
         model_name,
     )
-    input_ids = hf_lm.tokenizer(
-        prompt, return_tensors="pt"
-    ).input_ids.to(hf_lm.model.device)
-    prompt_len = input_ids.shape[1]
+    input_ids = torch.tensor([tokens]).to(hf_lm.model.device)
 
     if steer and hf_lm.steer_model is not None:
+        prompt_len = input_ids.shape[1]
         hf_lm.register_steer_prob_hook(prompt_len - 1, {"T": steer_T})
         logits = hf_lm.model(input_ids).logits
         hf_lm.remove_steer_prob_hook()
     else:
         logits = hf_lm.model(input_ids).logits
 
-    a_id, b_id = schwartz_eval.ab_token_ids(hf_lm.tokenizer)
     return schwartz_eval.score_ab_from_logits(
         logits[0, -1, :], a_id, b_id, pos_is_a
     )
@@ -358,11 +365,17 @@ def evaluate_steering(
     records = []
     eval_values = [v for v in values if v in steer_models]
 
+    if use_ab:
+        schwartz_eval.assign_pos_is_a_caa(
+            val_rows, config.SCHWARTZ_CIRCUMPLEX_ORDER, args.seed
+        )
+
     def _compute_logprob(prompt: str, completion: str, steer: bool = False) -> float:
         tokenizer = hf_lm.tokenizer
-        prompt_len = tokenizer(prompt, return_tensors="pt").input_ids.shape[1]
-        full_prompt = prompt + completion
-        full_inputs = tokenizer(full_prompt, return_tensors="pt").to(hf_lm.model.device)
+        device = hf_lm.model.device
+        full_inputs, prompt_len, answer_ids = schwartz_eval.prepare_qa_completion_inputs(
+            tokenizer, prompt, completion, device
+        )
 
         if steer and hf_lm.steer_model is not None:
             hf_lm.register_steer_prob_hook(prompt_len - 1, {"T": args.T})
@@ -371,13 +384,9 @@ def evaluate_steering(
         else:
             outputs = hf_lm.model(**full_inputs)
 
-        answer_ids = full_inputs.input_ids[0, prompt_len:]
-        if len(answer_ids) == 0:
-            return 0.0
-        answer_logits = outputs.logits[0, prompt_len - 1:-1]
-        full_log_probs = torch.nn.functional.log_softmax(answer_logits, dim=-1)
-        token_log_probs = full_log_probs.gather(-1, answer_ids.unsqueeze(-1)).squeeze(-1)
-        return token_log_probs.sum().item() / len(answer_ids)
+        return schwartz_eval.mean_completion_logprob_from_logits(
+            outputs.logits[0], prompt_len, answer_ids
+        )
 
     for value in eval_values:
         value_val_rows = config.get_rows_for_value(val_rows, value)
@@ -413,7 +422,11 @@ def evaluate_steering(
                     "ab_correct_steer": ab_steer["is_correct"],
                 })
             else:
-                prompt = f"Q: {row['question']}\nA: "
+                prompt = schwartz_eval.format_qa_eval_prompt(
+                    row["question"],
+                    tokenizer=hf_lm.tokenizer,
+                    model_name=args.model,
+                )
                 pos = row["positive_answer"]
                 neg = row["negative_answer"]
                 rec.update({
@@ -536,6 +549,18 @@ def save_vectors(vectors, out_dir, layer_idx, args):
     print(f"Saved {len(vectors)} displacement vectors to {vec_dir}/")
 
 
+def _default_schwartz_output_dir(args, layer_idx: int) -> str:
+    """Default results path under ``results/schwartz/{model}/…/seed_{seed}``."""
+    eval_slug = args.eval_metric.replace("_", "-")
+    run_name = (
+        f"{args.steer_type}-layer_{layer_idx}-T_{args.T}-train_{args.train_ratio}-"
+        f"eval_{eval_slug}"
+    )
+    return str(
+        get_project_dir() / "results" / "schwartz" / args.model / run_name / f"seed_{args.seed}"
+    )
+
+
 # ─── Main ───────────────────────────────────────────────────────────────────
 
 def main():
@@ -546,11 +571,7 @@ def main():
 
     # Output directory
     if args.output_dir is None:
-        args.output_dir = str(
-            get_project_dir() / "results" / "schwartz" / args.model
-            / f"{args.steer_type}-layer_{args.layer_idx}-T_{args.T}-train_{args.train_ratio}"
-            / f"seed_{args.seed}"
-        )
+        args.output_dir = _default_schwartz_output_dir(args, args.layer_idx)
     os.makedirs(args.output_dir, exist_ok=True)
 
     if verbose:
@@ -609,11 +630,7 @@ def main():
         layer_idx, sweep_info = select_layer(hf_lm, train_rows, values, args, verbose)
         hf_lm.steer_layer_idx = layer_idx
         # Update output dir with selected layer
-        args.output_dir = str(
-            get_project_dir() / "results" / "schwartz" / args.model
-            / f"{args.steer_type}-layer_{layer_idx}-T_{args.T}-train_{args.train_ratio}"
-            / f"seed_{args.seed}"
-        )
+        args.output_dir = _default_schwartz_output_dir(args, layer_idx)
         os.makedirs(args.output_dir, exist_ok=True)
         with open(os.path.join(args.output_dir, "layer_sweep.json"), "w") as f:
             json.dump(sweep_info, f, indent=2)

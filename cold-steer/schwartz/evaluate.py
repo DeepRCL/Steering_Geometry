@@ -30,6 +30,7 @@ import matplotlib.pyplot as plt
 
 from . import data_utils
 from . import method_adapters
+from .config import SCHWARTZ_CIRCUMPLEX_ORDER
 
 
 @torch.no_grad()
@@ -41,34 +42,30 @@ def _logprob_of_completion(
 ) -> float:
     """Mean per-token log-probability of ``completion_text`` given ``prompt_text``.
 
-    Caller is responsible for any hooks they want active during the
-    forward pass (e.g. ``register_steering_hooks`` or ``bypass_steering``).
+    Uses the same single-forward ODESteer scoring as ``shared.schwartz_eval``.
+    Caller is responsible for hooks (``register_steering_hooks`` / ``bypass_steering``).
 
-    When ``steerer`` is set, we populate ``gen_input_ids`` /
-    ``gen_attention_mask`` so ``LossFDSteerer.steer_output_hook`` can run
-    ``get_intermediate_activations`` (cold-steer's expected eval path).
+    When ``steerer`` is set, populate ``gen_input_ids`` / ``gen_attention_mask`` for
+    ``LossFDSteerer.steer_output_hook`` (cold-steer eval path).
     """
     tokenizer = steerable_llm.tokenizer
-    prompt_tok = tokenizer(prompt_text, return_tensors="pt")
-    full_tok = tokenizer(f"{prompt_text} {completion_text}", return_tensors="pt")
     device = steerable_llm.model.device
-    prompt_len = prompt_tok["input_ids"].shape[1]
-    full_input_ids = full_tok["input_ids"].to(device)
-    full_attention_mask = full_tok["attention_mask"].to(device)
-
-    answer_ids = full_input_ids[0, prompt_len:]
-    if answer_ids.numel() == 0:
-        return 0.0
+    full_inputs, prompt_len, answer_ids = schwartz_eval.prepare_qa_completion_inputs(
+        tokenizer, prompt_text, completion_text, device
+    )
+    full_input_ids = full_inputs.input_ids
+    full_attention_mask = full_inputs.get("attention_mask")
 
     if steerer is not None:
         steerer.gen_input_ids = full_input_ids
         steerer.gen_attention_mask = full_attention_mask
 
-    out = steerable_llm(input_ids=full_input_ids, attention_mask=full_attention_mask)
-    logits = out.logits[0, prompt_len - 1:-1, :]
-    log_probs = torch.nn.functional.log_softmax(logits.float(), dim=-1)
-    token_lps = log_probs.gather(-1, answer_ids.unsqueeze(-1)).squeeze(-1)
-    return float(token_lps.sum().item() / answer_ids.numel())
+    out = steerable_llm(
+        input_ids=full_input_ids, attention_mask=full_attention_mask
+    )
+    return schwartz_eval.mean_completion_logprob_from_logits(
+        out.logits[0], prompt_len, answer_ids
+    )
 
 
 @torch.no_grad()
@@ -81,8 +78,9 @@ def _score_ab_next_token(
     use_steering: bool = False,
 ) -> dict:
     """CAA-style P(A) vs P(B) with optional cold-steer hooks on one forward pass."""
-    pos_is_a = schwartz_eval.stable_pos_is_a(row, seed)
-    prompt = schwartz_eval.format_ab_eval_prompt(
+    pos_is_a = schwartz_eval.eval_pos_is_a(row, seed)
+    device = steerable_llm.model.device
+    tokens, a_id, b_id = schwartz_eval.format_ab_eval_tokens(
         row["question"],
         row["positive_answer"],
         row["negative_answer"],
@@ -90,25 +88,28 @@ def _score_ab_next_token(
         steerable_llm.tokenizer,
         model_name,
     )
-    input_ids = steerable_llm.tokenizer(
-        prompt, return_tensors="pt"
-    ).input_ids.to(steerable_llm.model.device)
+    input_ids = torch.tensor([tokens], device=device)
+    attention_mask = torch.ones_like(input_ids, device=device)
 
     if use_steering and steerer is not None:
         steerer.reset_steering()
-        handles = steerable_llm.register_steering_hooks(
-            lambda lidx: lambda m, i, o: steerer.steer_output_hook(m, i, o, layer_idx=lidx)
-        )
+        # steer_output_hook needs gen_* when hook args carry no input_ids (eval forward)
+        steerer.gen_input_ids = input_ids
+        steerer.gen_attention_mask = attention_mask
+        handles = method_adapters.register_eval_steering_hooks(steerable_llm, steerer)
         try:
-            logits = steerable_llm(input_ids=input_ids).logits
+            logits = steerable_llm(
+                input_ids=input_ids, attention_mask=attention_mask
+            ).logits
         finally:
             for h in handles:
                 h.remove()
     else:
         with steerer.bypass_steering():
-            logits = steerable_llm(input_ids=input_ids).logits
+            logits = steerable_llm(
+                input_ids=input_ids, attention_mask=attention_mask
+            ).logits
 
-    a_id, b_id = schwartz_eval.ab_token_ids(steerable_llm.tokenizer)
     return schwartz_eval.score_ab_from_logits(
         logits[0, -1, :], a_id, b_id, pos_is_a
     )
@@ -188,6 +189,9 @@ def evaluate_steerer(
     rng = random.Random(seed)
     device = steerable_llm.model.device
 
+    if use_ab:
+        schwartz_eval.assign_pos_is_a_caa(val_rows, SCHWARTZ_CIRCUMPLEX_ORDER, seed)
+
     for value in eval_values:
         steerer = steerers_by_value[value]
         method_adapters.load_steerer_state_to_device(steerer, device)
@@ -227,11 +231,10 @@ def evaluate_steerer(
                     "ab_correct_steer": ab_steer["is_correct"],
                 })
             else:
-                prompt_text = data_utils.format_prompt(
+                prompt_text = schwartz_eval.format_qa_eval_prompt(
                     row["question"],
-                    steerable_llm.tokenizer,
-                    use_chat_template,
-                    prompt_template,
+                    tokenizer=steerable_llm.tokenizer,
+                    model_name=model_name,
                 )
                 pos = row["positive_answer"]
                 neg = row["negative_answer"]
@@ -241,10 +244,8 @@ def evaluate_steerer(
                     lp_neg_base = _logprob_of_completion(steerable_llm, prompt_text, neg)
 
                 steerer.reset_steering()
-                handles = steerable_llm.register_steering_hooks(
-                    lambda lidx: lambda m, i, o: steerer.steer_output_hook(
-                        m, i, o, layer_idx=lidx
-                    )
+                handles = method_adapters.register_eval_steering_hooks(
+                    steerable_llm, steerer
                 )
                 try:
                     lp_pos_steer = _logprob_of_completion(
