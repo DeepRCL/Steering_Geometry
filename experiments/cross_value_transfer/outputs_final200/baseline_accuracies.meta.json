@@ -1,0 +1,11 @@
+{
+  "model_name": "Qwen/Qwen3.5-9B-Base",
+  "eval_dataset_path": "/home/mahdi.abootorabi/Steering_Geometry/CAA/value_data/final_dataset_200.csv",
+  "n_eval_samples": 100,
+  "eval_splits": [
+    "validation",
+    "test"
+  ],
+  "eval_split_fraction": 0.1,
+  "seed": 42
+}

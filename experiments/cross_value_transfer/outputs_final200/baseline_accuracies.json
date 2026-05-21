@@ -1,0 +1,22 @@
+{
+  "Self-direction: thought": 0.5909090909090909,
+  "Self-direction: action": 0.4,
+  "Stimulation": 0.15,
+  "Hedonism": 0.55,
+  "Achievement": 0.3333333333333333,
+  "Power: dominance": 0.2727272727272727,
+  "Power: resources": 0.3,
+  "Face": 0.47368421052631576,
+  "Security: personal": 0.5652173913043478,
+  "Security: societal": 0.21052631578947367,
+  "Tradition": 0.2,
+  "Conformity: rules": 0.6363636363636364,
+  "Conformity: interpersonal": 0.38095238095238093,
+  "Humility": 0.42857142857142855,
+  "Benevolence: dependability": 0.38095238095238093,
+  "Benevolence: caring": 0.5,
+  "Universalism: concern": 0.375,
+  "Universalism: nature": 0.5238095238095238,
+  "Universalism: tolerance": 0.631578947368421,
+  "Universalism: objectivity": 0.3333333333333333
+}
