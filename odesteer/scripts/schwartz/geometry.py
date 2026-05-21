@@ -128,6 +128,10 @@ def analyze_geometry(
     Full geometry analysis of steering vectors against the theoretical
     Schwartz circumplex.
 
+    Expects per-value vectors as mean ODE displacement on positive
+    training activations: mean(steer(x, T) - x). Preprocessing mean-centers
+    across all 20 values, then L2-normalizes before cosine similarities.
+
     Computes Spearman/Pearson correlations, silhouette scores, within-
     vs across-group cosine similarities, Procrustes alignment to the
     theoretical circle, and generates heatmaps plus dimensionality-
@@ -137,7 +141,7 @@ def analyze_geometry(
     llm-steering-opt package, ensuring cross-method comparability.
 
     Args:
-        vectors: Dict mapping value name -> (d_model,) tensor.
+        vectors: Dict mapping value name -> (d_model,) displacement tensor.
         relations_path: Path to schwartz_relations.json.
         output_dir: Directory to save geometry outputs.
         random_seed: Random seed for reproducibility.
@@ -155,6 +159,7 @@ def analyze_geometry(
     os.makedirs(out_dir, exist_ok=True)
 
     # ── 0. Mean-center then renormalize (consistent with CAA pipeline) ──
+    # Input vectors are mean ODE displacements; centering removes shared drift.
     # Step 1: collect raw vectors as float
     raw_vectors: Dict[str, torch.Tensor] = {}
     for val in SCHWARTZ_CIRCUMPLEX_ORDER:

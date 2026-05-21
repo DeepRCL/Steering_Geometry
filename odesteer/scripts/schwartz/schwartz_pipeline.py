@@ -5,6 +5,10 @@ Uses HuggingFaceLM for model management, fit_steer_model() for fitting,
 extract_prompt_eos_activations() for activation extraction, and
 compute_answer_prob() for evaluation — matching the ODESteer repo exactly.
 
+Geometry vectors are mean ODE displacements on positive training
+activations: mean(steer(pos_X, T) - pos_X), using the same T and ODE
+steps as inference steering.
+
 Usage:
     python scripts/schwartz/schwartz_pipeline.py \\
         --model Qwen2.5-7B-Base --steer_type ODESteer --layer_idx 13 \\
@@ -183,6 +187,25 @@ def select_layer(hf_lm, train_rows, values, args, verbose=True) -> Tuple[int, di
     return best, {"candidates": candidates, "scores": mean_scores, "best_layer": best}
 
 
+# ─── Value vector extraction ────────────────────────────────────────────────
+
+@torch.no_grad()
+def extract_displacement_vector(
+    steer: Any,
+    pos_X: torch.Tensor,
+    T: float,
+) -> Tuple[torch.Tensor, torch.Tensor]:
+    """
+    ODE steering displacement on positive training activations.
+
+    Runs the same steer() used at inference (full ODE integration for
+    ODESteer, single step for StepODESteer). Returns (mean displacement,
+    per-sample displacement norms).
+    """
+    displacements = steer.steer(pos_X, T=T) - pos_X
+    return displacements.mean(dim=0), displacements.norm(dim=-1)
+
+
 # ─── Training ───────────────────────────────────────────────────────────────
 
 def train_all_values(
@@ -197,7 +220,7 @@ def train_all_values(
     For each value:
         1. Extract pos/neg activations using HuggingFaceLM
         2. Fit an ODESteer model using those activations
-        3. Extract representative vector = mean of vector_field(pos_X)
+        3. Extract representative vector = mean(steer(pos_X, T) - pos_X)
     """
     steer_kwargs = get_steer_kwargs(args)
     vectors = {}
@@ -226,9 +249,7 @@ def train_all_values(
         steer.fit(pos_X, neg_X)
         steer_models[value] = steer
 
-        # Representative vector from vector field
-        vf = steer.vector_field(pos_X)
-        rep_vec = vf.mean(dim=0)
+        rep_vec, per_sample_disp = extract_displacement_vector(steer, pos_X, args.T)
         vectors[value] = rep_vec.detach().cpu().float()
 
         elapsed = time.time() - t0
@@ -242,15 +263,20 @@ def train_all_values(
         train_info[value] = {
             "n_pos": len(pos_X), "n_neg": len(neg_X),
             "clf_accuracy": round(acc, 4),
-            "rep_vec_norm": round(float(rep_vec.norm()), 4),
+            "displacement_norm": round(float(rep_vec.norm()), 4),
+            "mean_per_sample_displacement_norm": round(float(per_sample_disp.mean()), 4),
+            "T": args.T,
             "time_sec": round(elapsed, 2),
         }
         if verbose:
-            print(f"✓ {elapsed:.1f}s | clf_acc={acc:.3f} | norm={rep_vec.norm():.4f}")
+            print(
+                f"✓ {elapsed:.1f}s | clf_acc={acc:.3f} | "
+                f"disp_norm={rep_vec.norm():.4f}"
+            )
 
     if verbose:
         print(f"\n  Fitted {len(vectors)}/{len(values)} models\n")
-    return vectors, steer_models
+    return vectors, steer_models, train_info
 
 
 # ─── Evaluation (using ODESteer's compute_answer_prob) ──────────────────────
@@ -438,15 +464,25 @@ def evaluate_steering(
 def save_vectors(vectors, out_dir, layer_idx, args):
     vec_dir = os.path.join(out_dir, "vectors")
     os.makedirs(vec_dir, exist_ok=True)
-    manifest = {}
+    manifest = {
+        "vector_type": "ode_displacement",
+        "definition": "mean(steer(pos_X, T) - pos_X)",
+        "T": args.T,
+        "steps": getattr(args, "steps", None),
+        "steer_type": args.steer_type,
+        "values": {},
+    }
     for value, vector in vectors.items():
         safe = value.lower().replace(": ", "_").replace(":", "_").replace(" ", "_").replace("-", "_")
         torch.save(vector.detach().cpu(), os.path.join(vec_dir, f"{safe}.pt"))
-        manifest[value] = {"file": f"{safe}.pt", "layer": layer_idx,
-                           "norm": round(vector.norm().item(), 4)}
+        manifest["values"][value] = {
+            "file": f"{safe}.pt",
+            "layer": layer_idx,
+            "norm": round(vector.norm().item(), 4),
+        }
     with open(os.path.join(vec_dir, "manifest.json"), "w") as f:
         json.dump(manifest, f, indent=2)
-    print(f"Saved {len(vectors)} vectors to {vec_dir}/")
+    print(f"Saved {len(vectors)} displacement vectors to {vec_dir}/")
 
 
 # ─── Main ───────────────────────────────────────────────────────────────────
@@ -534,14 +570,26 @@ def main():
     # 4. Train all values
     if verbose:
         print(f"Training {args.steer_type} models at layer {layer_idx}")
-    vectors, steer_models = train_all_values(hf_lm, train_rows, values, layer_idx, args, verbose)
+    vectors, steer_models, train_info = train_all_values(
+        hf_lm, train_rows, values, layer_idx, args, verbose
+    )
 
     # Save vectors
     save_vectors(vectors, args.output_dir, layer_idx, args)
 
     # Save training info
     with open(os.path.join(args.output_dir, "training_info.json"), "w") as f:
-        json.dump({v: {"norm": round(vectors[v].norm().item(), 4)} for v in vectors}, f, indent=2)
+        json.dump(
+            {
+                "vector_type": "ode_displacement",
+                "T": args.T,
+                "steps": args.steps,
+                "steer_type": args.steer_type,
+                "per_value": train_info,
+            },
+            f,
+            indent=2,
+        )
 
     # 5. Evaluate steering
     if not args.skip_eval and steer_models:

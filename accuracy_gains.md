@@ -25,11 +25,12 @@ The mean is macro-averaged over the 20 Schwartz values. The best alpha is select
 
 | Model | Method | Baseline Acc. | Best Steered Acc. | Gain | Relative Gain | Best Alpha |
 |---|---|---:|---:|---:|---:|---:|
-| Qwen3.5-9B Base | OPT | -- | -- | -- | -- | -- |
 | Qwen3.5-9B Base | CAA | 41.40% | 53.13% | +11.74 pp | +28.36% | 40 |
 | Qwen3.5-9B Base | SparseCAA | 44.34% | 51.20% | +6.86 pp | +15.48% | 4 |
 | Qwen3.5-9B Base | QwenScopeCAA SparseCAA (k=1024) | 48.14% | 56.70% | +8.57 pp | +17.79% | 2 |
-| Qwen3.5-9B Instruct | OPT | -- | -- | -- | -- | -- |
+| Qwen3.5-9B Base | OPT | 23.8% | 76.0% | +52.3% | -- | 40 |
+| Qwen3.5-9B Base | ODE-Steer | 48.4% | 65.2% | +16.7% | -- | 20 |
+| Qwen3.5-9B Instruct | OPT | -- | -- | -- | -- | -- | 
 | Qwen3.5-9B Instruct | CAA | 49.25% | 49.25% | +0.00 pp | +0.00% | 0.25 |
 | Qwen3.5-9B Instruct | SparseCAA | 51.20% | 51.20% | +0.00 pp | +0.00% | 0.5 |
 
