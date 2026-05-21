@@ -22,7 +22,8 @@ class TransferExperimentConfig:
     # ── Model ──────────────────────────────────────────────────────────────
     model_name: Optional[str] = None
     """HuggingFace model identifier (e.g. ``"Qwen/Qwen3.5-9B"``).
-    If None, the runner reads ``model_name`` from ``caa_run_dir/config.json``."""
+    If None, the runner reads ``model_name`` from the first method run dir's
+    ``config.json``."""
 
     device: str = "auto"
     """Torch device string or ``"auto"`` to use CUDA when available."""
@@ -44,6 +45,27 @@ class TransferExperimentConfig:
     caa_vector_source: str = "vectors"
     """Which vectors to evaluate: ``"vectors"`` for ordinary layer_N.pt CAA
     vectors, or ``"geometry_vectors"`` for transformed geometry vectors."""
+
+    # ── SphericalSteer-specific ────────────────────────────────────────────
+    spherical_run_dir: str = ""
+    """Path to the model-specific SphericalSteer output directory that directly
+    contains ``vectors/`` and ``config.json``."""
+
+    spherical_layer: Optional[int] = None
+    """Layer index to load for SphericalSteer vectors.  If None, read from
+    ``config.json`` layer_override or ``geometry_vectors/manifest.json``."""
+
+    spherical_kappa: Optional[float] = None
+    """Optional override for SphericalSteer vMF concentration.  If None, read
+    from ``{spherical_run_dir}/config.json``."""
+
+    spherical_beta: Optional[float] = None
+    """Optional override for the SphericalSteer trigger threshold.  If None,
+    read from ``{spherical_run_dir}/config.json``."""
+
+    spherical_steer_position: Optional[str] = None
+    """Optional override for SphericalSteer hook position: ``"last"`` or
+    ``"all"``.  If None, read from ``{spherical_run_dir}/config.json``."""
 
     # ── Evaluation dataset ─────────────────────────────────────────────────
     eval_dataset_path: str = (
@@ -117,6 +139,11 @@ class TransferExperimentConfig:
             caa_run_dir=abs_if_relative(self.caa_run_dir),
             caa_layer=self.caa_layer,
             caa_vector_source=self.caa_vector_source,
+            spherical_run_dir=abs_if_relative(self.spherical_run_dir),
+            spherical_layer=self.spherical_layer,
+            spherical_kappa=self.spherical_kappa,
+            spherical_beta=self.spherical_beta,
+            spherical_steer_position=self.spherical_steer_position,
             eval_dataset_path=abs_if_relative(self.eval_dataset_path),
             n_eval_samples=self.n_eval_samples,
             eval_splits=None if self.eval_splits is None else list(self.eval_splits),

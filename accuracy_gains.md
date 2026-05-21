@@ -35,6 +35,7 @@ For the dual-metric runs:
 | Qwen3.5-9B Base | ODE-Steer | 48.4% | 65.2% | +16.7 pp | -- | 20 |
 | Qwen3.5-9B Base | SphericalSteer | 41.18% | 50.57% | +9.38 pp | +22.78% | 0.9 |
 | Qwen3.5-9B Base | CAA | 41.18% | 59.25% | +18.07 pp | +43.87% | 20.0 |
+| Qwen3.5-9B Base | BiPO | 41.18% | 50.05% | +8.87 pp | +21.54% | 10.0 |
 | Qwen3.5-9B Base | SparseCAA | 44.34% | 51.20% | +6.86 pp | +15.48% | 4.0 |
 | Qwen3.5-9B Instruct | OPT | -- | -- | -- | -- | -- |
 | Qwen3.5-9B Instruct | SphericalSteer | 49.25% | 48.99% | -0.26 pp | -0.53% | 0.9 |
@@ -53,6 +54,8 @@ Note: The paper-wired SparseCAA rows use `SAE/SparseCAA/outputs/Qwen__Qwen3.5-9B
 | Qwen3.5-9B Base | CAA | Full-answer mean logprob | 40.55% | 71.12% | +30.57 pp | +75.38% | 40.0 | `CAA/Geometry/outputs/qwen3_5_9b_base_best_dual_metrics_20260520_183805/Qwen__Qwen3.5-9B-Base` |
 | Qwen3.5-9B Base | SphericalSteer | A/B next-token | 41.18% | 50.57% | +9.38 pp | +22.78% | 0.9 | `SphericalSteer/focused_tuning/k2_bneg0p6_base_final_dual_new_relations/Qwen__Qwen3.5-9B-Base` |
 | Qwen3.5-9B Base | SphericalSteer | Full-answer mean logprob | 40.55% | 42.65% | +2.10 pp | +5.18% | 0.9 | `SphericalSteer/focused_tuning/k2_bneg0p6_base_final_dual_new_relations/Qwen__Qwen3.5-9B-Base` |
+| Qwen3.5-9B Base | BiPO | A/B next-token | 41.18% | 50.05% | +8.87 pp | +21.54% | 10.0 | `BiPO/focused_tuning/qwen35_opt_20260520_221258/Qwen__Qwen3.5-9B-Base` |
+| Qwen3.5-9B Base | BiPO | Full-answer mean logprob | 40.55% | 61.18% | +20.63 pp | +50.87% | 10.0 | `BiPO/focused_tuning/qwen35_opt_20260520_221258/Qwen__Qwen3.5-9B-Base` |
 | Qwen3.5-9B Base | SparseCAA | A/B next-token | 44.34% | 51.20% | +6.86 pp | +15.48% | 4.0 | `SAE/SparseCAA/outputs/Qwen__Qwen3.5-9B-Base` |
 | Qwen3.5-9B Instruct | CAA | A/B next-token | 49.25% | 50.04% | +0.79 pp | +1.60% | 20.0 | `CAA/Geometry/outputs/qwen3_5_9b_instruct_best_final_dual/Qwen__Qwen3.5-9B` |
 | Qwen3.5-9B Instruct | CAA | Full-answer mean logprob | 17.04% | 48.56% | +31.52 pp | +185.04% | 40.0 | `CAA/Geometry/outputs/qwen3_5_9b_instruct_best_final_dual/Qwen__Qwen3.5-9B` |
