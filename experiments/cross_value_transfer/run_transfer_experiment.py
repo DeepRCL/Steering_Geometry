@@ -20,7 +20,6 @@ from __future__ import annotations
 import csv
 import json
 import random
-import shutil
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -74,14 +73,30 @@ def load_eval_instances(
     """
     rng = random.Random(config.seed)
     grouped: Dict[str, List[dict]] = {v: [] for v in CIRCUMPLEX_ORDER}
+    allowed_splits = set(config.eval_splits or [])
+    use_all_splits = not allowed_splits
+    seen_splits = set()
+    skipped_by_split = 0
+    has_split_column = False
+    has_caa_suitable_column = False
 
     with open(config.eval_dataset_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
+        fieldnames = set(reader.fieldnames or [])
+        has_split_column = "split" in fieldnames
+        has_caa_suitable_column = "caa_suitable" in fieldnames
         for row in reader:
+            if has_split_column:
+                split = (row.get("split") or "").strip()
+                if split:
+                    seen_splits.add(split)
+                if not use_all_splits and split not in allowed_splits:
+                    skipped_by_split += 1
+                    continue
             value = (row.get("value") or "").strip()
             if value not in CIRCUMPLEX_ORDER:
                 continue
-            if (row.get("caa_suitable") or "").strip() != "True":
+            if has_caa_suitable_column and (row.get("caa_suitable") or "").strip() != "True":
                 continue
             grouped[value].append(row)
 
@@ -89,13 +104,16 @@ def load_eval_instances(
     for value in CIRCUMPLEX_ORDER:
         rows = grouped[value]
         rng.shuffle(rows)
+        if not has_split_column and not use_all_splits:
+            n_holdout = int(len(rows) * config.eval_split_fraction)
+            rows = rows[:n_holdout]
         rows = rows[: config.n_eval_samples]
 
         instances = []
         for row in rows:
             instances.append(
                 EvalInstance(
-                    sample_id=row.get("argument_id") or row.get("id") or "",
+                    sample_id=row.get("id") or row.get("argument_id") or "",
                     value=value,
                     question=row.get("question") or "",
                     positive_answer=row.get("positive_answer") or "",
@@ -106,13 +124,72 @@ def load_eval_instances(
         eval_instances[value] = instances
 
     n_total = sum(len(v) for v in eval_instances.values())
-    print(f"Loaded eval instances: {n_total} total across {len(CIRCUMPLEX_ORDER)} values")
+    split_label = "all" if use_all_splits else ",".join(sorted(allowed_splits))
+    if not has_split_column and not use_all_splits:
+        split_label = f"deterministic {config.eval_split_fraction:.3g} holdout"
+    print(
+        f"Loaded eval instances: {n_total} total across {len(CIRCUMPLEX_ORDER)} "
+        f"values (splits={split_label})"
+    )
+    if skipped_by_split:
+        print(f"  Skipped {skipped_by_split} rows outside eval_splits")
+    if not has_split_column:
+        print("  CSV has no split column; used per-value shuffled holdout fallback")
+    if has_split_column and not use_all_splits:
+        missing = sorted(allowed_splits - seen_splits)
+        if missing:
+            print(f"  Warning: requested split labels not found in CSV: {missing}")
     for v in CIRCUMPLEX_ORDER:
         n = len(eval_instances[v])
         if n < config.n_eval_samples:
-            print(f"  Warning: only {n} caa_suitable rows for '{v}' (< {config.n_eval_samples})")
+            row_kind = "rows" if not has_caa_suitable_column else "caa_suitable rows"
+            print(f"  Warning: only {n} {row_kind} for '{v}' (< {config.n_eval_samples})")
 
     return eval_instances
+
+
+def _metadata_matches(path: Path, expected: dict) -> bool:
+    """Return True iff ``path`` contains exactly the expected metadata dict."""
+    if not path.exists():
+        return False
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            actual = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return False
+    return actual == expected
+
+
+def _baseline_metadata(config: TransferExperimentConfig, model_name: str) -> dict:
+    """Settings that determine cached baseline accuracies."""
+    return {
+        "model_name": model_name,
+        "eval_dataset_path": str(Path(config.eval_dataset_path).resolve()),
+        "n_eval_samples": config.n_eval_samples,
+        "eval_splits": config.eval_splits or [],
+        "eval_split_fraction": config.eval_split_fraction,
+        "seed": config.seed,
+    }
+
+
+def _method_metadata(
+    config: TransferExperimentConfig,
+    method: SteeringMethod,
+    model_name: str,
+) -> dict:
+    """Settings that determine a method's T matrix and metrics."""
+    metadata = _baseline_metadata(config, model_name)
+    metadata.update(
+        {
+            "method": method.name,
+            "layer": method.layer,
+            "alpha": config.alpha,
+            "relations_path": str(Path(config.relations_path).resolve()),
+        }
+    )
+    if hasattr(method, "cache_metadata"):
+        metadata["method_cache_metadata"] = method.cache_metadata()
+    return metadata
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -124,6 +201,7 @@ def compute_baseline(
     eval_instances: Dict[str, List[EvalInstance]],
     formatter: PromptFormatter,
     output_dir: Path,
+    cache_metadata: Optional[dict] = None,
     force: bool = False,
 ) -> Dict[str, float]:
     """Compute per-value baseline accuracy (no steering hook).
@@ -136,11 +214,18 @@ def compute_baseline(
     dict mapping each value name → float accuracy in [0, 1].
     """
     cache_path = output_dir / "baseline_accuracies.json"
+    meta_path = output_dir / "baseline_accuracies.meta.json"
 
-    if cache_path.exists() and not force:
+    if (
+        cache_path.exists()
+        and not force
+        and (cache_metadata is None or _metadata_matches(meta_path, cache_metadata))
+    ):
         print(f"Loading cached baseline accuracies from {cache_path}")
-        with open(cache_path, "r") as f:
+        with open(cache_path, "r", encoding="utf-8") as f:
             return json.load(f)
+    if cache_path.exists() and not force and cache_metadata is not None:
+        print("Cached baseline metadata is missing or stale; recomputing baseline.")
 
     print("Computing baseline accuracies (no steering)...")
     baseline: Dict[str, float] = {}
@@ -154,8 +239,11 @@ def compute_baseline(
         baseline[value] = float(np.mean([r["is_correct"] for r in results]))
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    with open(cache_path, "w") as f:
+    with open(cache_path, "w", encoding="utf-8") as f:
         json.dump(baseline, f, indent=2)
+    if cache_metadata is not None:
+        with open(meta_path, "w", encoding="utf-8") as f:
+            json.dump(cache_metadata, f, indent=2)
     print(f"Baseline saved to {cache_path}")
 
     return baseline
@@ -223,6 +311,7 @@ def save_method_outputs(
     baseline_accs: Dict[str, float],
     output_dir: Path,
     alpha: float,
+    run_metadata: Optional[dict] = None,
 ) -> Path:
     """Save all per-method artefacts under ``{output_dir}/{method_name}/``.
 
@@ -260,6 +349,11 @@ def save_method_outputs(
     # metrics.json
     with open(method_dir / "metrics.json", "w") as f:
         json.dump(metrics_dict, f, indent=2)
+
+    # run metadata for cache invalidation
+    if run_metadata is not None:
+        with open(method_dir / "run_metadata.json", "w", encoding="utf-8") as f:
+            json.dump(run_metadata, f, indent=2)
 
     # Visualisations
     plot_T_heatmap(T, method_name, alpha, method_dir / "T_heatmap.png")
@@ -674,7 +768,12 @@ def run_experiment(
 
     # ── Baseline (cached, shared across methods) ──────────────────────────────
     baseline_accs = compute_baseline(
-        model_info, eval_instances, formatter, output_dir, force=config.force_recompute
+        model_info,
+        eval_instances,
+        formatter,
+        output_dir,
+        cache_metadata=_baseline_metadata(config, model_name),
+        force=config.force_recompute,
     )
 
     # ── Load R matrix for metrics ─────────────────────────────────────────────
@@ -688,10 +787,21 @@ def run_experiment(
 
         method_dir = output_dir / method.name
         metrics_path = method_dir / "metrics.json"
+        metadata_path = method_dir / "run_metadata.json"
+        method_metadata = _method_metadata(config, method, model_name)
 
-        if metrics_path.exists() and not config.force_recompute:
-            print(f"Outputs already exist at {method_dir}. Skipping (use --force_recompute to redo).")
+        if (
+            metrics_path.exists()
+            and not config.force_recompute
+            and _metadata_matches(metadata_path, method_metadata)
+        ):
+            print(
+                f"Outputs already exist at {method_dir} with matching metadata. "
+                "Skipping (use --force_recompute to redo)."
+            )
             continue
+        if metrics_path.exists() and not config.force_recompute:
+            print(f"Existing outputs at {method_dir} are stale; recomputing.")
 
         T = build_T_matrix(
             method, model_info, eval_instances, formatter, baseline_accs, config.alpha
@@ -704,7 +814,13 @@ def run_experiment(
         )
 
         save_method_outputs(
-            method.name, T, metrics_dict, baseline_accs, output_dir, config.alpha
+            method.name,
+            T,
+            metrics_dict,
+            baseline_accs,
+            output_dir,
+            config.alpha,
+            run_metadata=method_metadata,
         )
 
         print(f"\nMetrics summary for '{method.name}':")

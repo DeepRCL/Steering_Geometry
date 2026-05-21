@@ -90,10 +90,12 @@ class CAAMethod(SteeringMethod):
         layer: Optional[int] = None,
         model_name: Optional[str] = None,
         method_name: str = "caa",
+        vector_source: str = "vectors",
     ) -> None:
         self._run_dir = Path(run_dir).resolve()
         self._layer_override = layer
         self._model_name_override = model_name
+        self._vector_source = vector_source
         self._method_name = method_name
 
         if not self._run_dir.exists():
@@ -101,8 +103,14 @@ class CAAMethod(SteeringMethod):
                 f"CAAMethod: run_dir does not exist: {self._run_dir}"
             )
 
+        if self._vector_source not in {"vectors", "geometry_vectors"}:
+            raise ValueError(
+                "CAAMethod: vector_source must be either 'vectors' or "
+                f"'geometry_vectors', got {self._vector_source!r}."
+            )
+
         # Validate that this looks like the right directory level
-        vectors_dir = self._run_dir / "vectors"
+        vectors_dir = self._run_dir / self._vector_source
         if not vectors_dir.exists():
             # Try to give a helpful suggestion
             parent = self._run_dir.parent
@@ -112,8 +120,8 @@ class CAAMethod(SteeringMethod):
                 if siblings else ""
             )
             raise FileNotFoundError(
-                f"CAAMethod: no 'vectors/' subdirectory found in:\n  {self._run_dir}\n"
-                f"Pass the model-specific directory that directly contains vectors/ "
+                f"CAAMethod: no '{self._vector_source}/' subdirectory found in:\n  {self._run_dir}\n"
+                f"Pass the model-specific directory that directly contains {self._vector_source}/ "
                 f"(e.g. CAA/Geometry/outputs/<run>/Qwen__Qwen3.5-9B-Base).{hint}"
             )
 
@@ -124,9 +132,19 @@ class CAAMethod(SteeringMethod):
         return self._method_name
 
     @property
+    def vector_source(self) -> str:
+        return self._vector_source
+
+    @property
     def layer(self) -> int:
         if self._layer_override is not None:
             return self._layer_override
+
+        if self._vector_source == "geometry_vectors":
+            manifest_path = self._run_dir / "geometry_vectors" / "manifest.json"
+            if manifest_path.exists():
+                with open(manifest_path, "r") as f:
+                    return int(json.load(f)["layer_idx"])
 
         selected_layer_path = self._run_dir / "layer_selection" / "selected_layer.json"
         if selected_layer_path.exists():
@@ -166,7 +184,64 @@ class CAAMethod(SteeringMethod):
             return data.get("model_name", "unknown")
         return "unknown"
 
+    def cache_metadata(self) -> dict:
+        """Settings that identify the exact vector source for cache reuse."""
+        metadata = {
+            "run_dir": str(self._run_dir),
+            "vector_source": self._vector_source,
+            "layer": self.layer,
+        }
+        if self._vector_source == "geometry_vectors":
+            manifest_path = self._run_dir / "geometry_vectors" / "manifest.json"
+            if manifest_path.exists():
+                with open(manifest_path, "r") as f:
+                    manifest = json.load(f)
+                metadata["geometry_manifest"] = {
+                    k: v for k, v in manifest.items() if k != "vectors"
+                }
+        return metadata
+
     # ── vectors ──────────────────────────────────────────────────────────────
+
+    def _load_geometry_vectors(self) -> Dict[str, torch.Tensor]:
+        geometry_dir = self._run_dir / "geometry_vectors"
+        manifest_path = geometry_dir / "manifest.json"
+        if not manifest_path.exists():
+            raise FileNotFoundError(
+                f"CAAMethod: geometry vector manifest not found: {manifest_path}"
+            )
+
+        with open(manifest_path, "r") as f:
+            manifest = json.load(f)
+        vector_files = manifest.get("vectors", {})
+
+        vectors: Dict[str, torch.Tensor] = {}
+        missing = []
+        for value in CIRCUMPLEX_ORDER:
+            filename = vector_files.get(value)
+            if not filename:
+                missing.append(value)
+                continue
+            vec_path = geometry_dir / filename
+            if not vec_path.exists():
+                raise FileNotFoundError(
+                    f"CAAMethod: geometry vector file missing for value '{value}'.\n"
+                    f"Expected path: {vec_path}"
+                )
+            vec = torch.load(vec_path, map_location="cpu", weights_only=True)
+            vec = vec.to(dtype=torch.float32)
+            norm = vec.norm()
+            if norm > 0:
+                vec = vec / norm
+            vectors[value] = vec
+
+        if missing:
+            raise FileNotFoundError(
+                "CAAMethod: geometry_vectors/manifest.json is missing entries "
+                f"for values: {missing}"
+            )
+
+        return vectors
 
     def load_vectors(self) -> Dict[str, torch.Tensor]:
         """Load and unit-normalise the per-value CAA vectors for ``self.layer``.
@@ -181,6 +256,9 @@ class CAAMethod(SteeringMethod):
             If any value's vector file is missing, with a message that lists
             what layers are available for that value.
         """
+        if self._vector_source == "geometry_vectors":
+            return self._load_geometry_vectors()
+
         layer_idx = self.layer
         vectors: Dict[str, torch.Tensor] = {}
 

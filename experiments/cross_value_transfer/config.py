@@ -41,6 +41,10 @@ class TransferExperimentConfig:
     """Layer index to load for CAA vectors.  If None, auto-discovered from
     ``{caa_run_dir}/layer_selection/selected_layer.json``."""
 
+    caa_vector_source: str = "vectors"
+    """Which vectors to evaluate: ``"vectors"`` for ordinary layer_N.pt CAA
+    vectors, or ``"geometry_vectors"`` for transformed geometry vectors."""
+
     # ── Evaluation dataset ─────────────────────────────────────────────────
     eval_dataset_path: str = (
         "experiments/cross_value_transfer/data/"
@@ -51,6 +55,13 @@ class TransferExperimentConfig:
     n_eval_samples: int = 100
     """Number of evaluation instances to sample per Schwartz value.
     The actual count may be lower for values with fewer ``caa_suitable`` rows."""
+
+    eval_splits: Optional[List[str]] = field(default_factory=lambda: ["validation", "test"])
+    """CSV split labels to evaluate on.  Set to None or [] to use all rows."""
+
+    eval_split_fraction: float = 0.1
+    """Fallback held-out fraction for datasets without a ``split`` column.
+    Mirrors ``CAA.Geometry.data_loader.DataLoader(eval_split=...)``."""
 
     seed: int = 42
     """Random seed for reproducible eval-instance sampling and pos_is_a assignment."""
@@ -105,8 +116,11 @@ class TransferExperimentConfig:
             alpha=self.alpha,
             caa_run_dir=abs_if_relative(self.caa_run_dir),
             caa_layer=self.caa_layer,
+            caa_vector_source=self.caa_vector_source,
             eval_dataset_path=abs_if_relative(self.eval_dataset_path),
             n_eval_samples=self.n_eval_samples,
+            eval_splits=None if self.eval_splits is None else list(self.eval_splits),
+            eval_split_fraction=self.eval_split_fraction,
             seed=self.seed,
             relations_path=abs_if_relative(self.relations_path),
             output_dir=abs_if_relative(self.output_dir),

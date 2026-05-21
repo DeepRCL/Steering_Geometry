@@ -19,6 +19,13 @@ With explicit overrides:
         --output_dir   experiments/cross_value_transfer/outputs \\
         --seed         42
 
+Evaluate transformed geometry vectors from a geometry run:
+
+    python experiments/cross_value_transfer/run.py \\
+        --caa_run_dir  CAA/Geometry/outputs/qwen3_5_9b_base_best_dual_metrics_20260520_183805/Qwen__Qwen3.5-9B-Base \\
+        --methods      caa_geometry \\
+        --alpha        20.0
+
 Load a saved config JSON (individual flags override it):
 
     python experiments/cross_value_transfer/run.py \\
@@ -105,6 +112,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Layer index for CAA vectors. If omitted, read from "
              "{caa_run_dir}/layer_selection/selected_layer.json.",
     )
+    p.add_argument(
+        "--caa_vector_source",
+        type=str,
+        default=None,
+        choices=["vectors", "geometry_vectors"],
+        help="Load ordinary CAA vectors from vectors/ or transformed vectors "
+             "from geometry_vectors/. Default: vectors.",
+    )
 
     # ── Evaluation ───────────────────────────────────────────────────────────
     p.add_argument(
@@ -120,6 +135,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="N",
         help="Max evaluation instances to sample per value. Default: 100.",
+    )
+    p.add_argument(
+        "--eval_splits",
+        type=str,
+        default=None,
+        metavar="S1[,S2,...]",
+        help="Comma-separated CSV split labels to evaluate on. Use 'all' to "
+             "disable split filtering. Default: validation,test.",
+    )
+    p.add_argument(
+        "--eval_split_fraction",
+        type=float,
+        default=None,
+        metavar="FLOAT",
+        help="Held-out fraction to use when the evaluation CSV has no split "
+             "column. Mirrors the CAA Geometry eval_split. Default: 0.1.",
     )
     p.add_argument(
         "--seed",
@@ -186,10 +217,19 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.caa_run_dir = args.caa_run_dir
     if args.caa_layer is not None:
         cfg.caa_layer = args.caa_layer
+    if args.caa_vector_source is not None:
+        cfg.caa_vector_source = args.caa_vector_source
     if args.eval_dataset is not None:
         cfg.eval_dataset_path = args.eval_dataset
     if args.n_eval_samples is not None:
         cfg.n_eval_samples = args.n_eval_samples
+    if args.eval_splits is not None:
+        if args.eval_splits.strip().lower() == "all":
+            cfg.eval_splits = None
+        else:
+            cfg.eval_splits = [s.strip() for s in args.eval_splits.split(",") if s.strip()]
+    if args.eval_split_fraction is not None:
+        cfg.eval_split_fraction = args.eval_split_fraction
     if args.seed is not None:
         cfg.seed = args.seed
     if args.relations_path is not None:
@@ -213,17 +253,36 @@ def _build_methods(cfg: TransferExperimentConfig):
                 raise ValueError(
                     "Method 'caa' requires --caa_run_dir to be specified."
                 )
+            output_method_name = (
+                "caa_geometry"
+                if cfg.caa_vector_source == "geometry_vectors"
+                else "caa"
+            )
             method = CAAMethod(
                 run_dir=cfg.caa_run_dir,
                 layer=cfg.caa_layer,
                 model_name=cfg.model_name,
-                method_name="caa",
+                method_name=output_method_name,
+                vector_source=cfg.caa_vector_source,
+            )
+            methods.append(method)
+        elif method_name in {"caa_geometry", "caa_geometry_vectors"}:
+            if not cfg.caa_run_dir:
+                raise ValueError(
+                    f"Method '{method_name}' requires --caa_run_dir to be specified."
+                )
+            method = CAAMethod(
+                run_dir=cfg.caa_run_dir,
+                layer=cfg.caa_layer,
+                model_name=cfg.model_name,
+                method_name="caa_geometry",
+                vector_source="geometry_vectors",
             )
             methods.append(method)
         else:
             raise ValueError(
                 f"Unknown method '{method_name}'. "
-                f"Currently supported: ['caa']."
+                f"Currently supported: ['caa', 'caa_geometry']."
             )
     return methods
 
@@ -244,8 +303,11 @@ def main(argv=None) -> None:
     print(f"  alpha          : {cfg.alpha}")
     print(f"  caa_run_dir    : {cfg.caa_run_dir}")
     print(f"  caa_layer      : {cfg.caa_layer!r}  (None = auto-discover)")
+    print(f"  caa_vector_src : {cfg.caa_vector_source}")
     print(f"  eval_dataset   : {cfg.eval_dataset_path}")
     print(f"  n_eval_samples : {cfg.n_eval_samples}")
+    print(f"  eval_splits    : {cfg.eval_splits if cfg.eval_splits else 'all'}")
+    print(f"  eval_fraction  : {cfg.eval_split_fraction}")
     print(f"  seed           : {cfg.seed}")
     print(f"  relations_path : {cfg.relations_path}")
     print(f"  output_dir     : {cfg.output_dir}")
