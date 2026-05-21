@@ -6,6 +6,11 @@ Accuracy gain is computed as:
 
 The mean is macro-averaged over the 20 Schwartz values. The best alpha is selected by highest mean accuracy gain on the held-out validation/eval split.
 
+For the dual-metric runs:
+
+- `A/B next-token` compares `P(A)` vs. `P(B)` on the multiple-choice evaluation prompt.
+- `Full-answer mean logprob` compares mean token log-probability of the full positive answer vs. the full negative answer.
+
 ## CAA: Model Sweep
 
 | Model | Baseline Acc. | Best Steered Acc. | Gain | Relative Gain | Best Alpha |
@@ -25,7 +30,8 @@ The mean is macro-averaged over the 20 Schwartz values. The best alpha is select
 
 | Model | Method | Baseline Acc. | Best Steered Acc. | Gain | Relative Gain | Best Alpha |
 |---|---|---:|---:|---:|---:|---:|
-| Qwen3.5-9B Base | CAA | 41.40% | 53.13% | +11.74 pp | +28.36% | 40 |
+| Qwen3.5-9B Base | CAA | 41.18% | 59.25% | +18.07 pp | +43.87% | 20 |
+| Qwen3.5-9B Base | SphericalSteer | 41.18% | 50.57% | +9.38 pp | +22.78% | 0.9 |
 | Qwen3.5-9B Base | SparseCAA | 44.34% | 51.20% | +6.86 pp | +15.48% | 4 |
 | Qwen3.5-9B Base | QwenScopeCAA SparseCAA (k=1024) | 48.14% | 56.70% | +8.57 pp | +17.79% | 2 |
 | Qwen3.5-9B Base | OPT | 23.8% | 76.0% | +52.3% | -- | 40 |
@@ -37,3 +43,12 @@ The mean is macro-averaged over the 20 Schwartz values. The best alpha is select
 Note: OPT accuracy artifacts were not present locally. The OPT pipeline should produce `steering_eval_metrics.json` under `llm-steering-opt/steering_results/...`; those values can be filled in later.
 
 Note: The paper-wired SparseCAA row uses `SAE/SparseCAA/outputs/Qwen__Qwen3.5-9B-Base` with `SAE/sae_base_best.pt`. The QwenScopeCAA row uses `SAE/QwenScopeCAA/outputs/Qwen__Qwen3.5-9B-Base_layer16_k1024` with the pretrained `Qwen/SAE-Res-Qwen3.5-9B-Base-W64K-L0_50` SAE, so it should be treated as a separate sparse variant.
+
+## Qwen3.5-9B: Dual-Metric Clean Runs
+
+| Model | Method | Metric | Baseline Acc. | Best Steered Acc. | Gain | Relative Gain | Best Alpha | Run |
+|---|---|---|---:|---:|---:|---:|---:|---|
+| Qwen3.5-9B Base | CAA | A/B next-token | 41.18% | 59.25% | +18.07 pp | +43.87% | 20 | `CAA/Geometry/outputs/qwen3_5_9b_base_best_dual_metrics_20260520_183805/Qwen__Qwen3.5-9B-Base` |
+| Qwen3.5-9B Base | CAA | Full-answer mean logprob | rerun needed | rerun needed | rerun needed | rerun needed | 40 | Previous run used a non-autoregressive scorer; rerun for consistency with SparseCAA, QwenScopeCAA, SphericalSteer, and OPT. |
+| Qwen3.5-9B Base | SphericalSteer | A/B next-token | 41.18% | 50.57% | +9.38 pp | +22.78% | 0.9 | `SphericalSteer/focused_tuning/k2_bneg0p6_dual_metrics_20260520_183805/Qwen__Qwen3.5-9B-Base` |
+| Qwen3.5-9B Base | SphericalSteer | Full-answer mean logprob | rerun needed | rerun needed | rerun needed | rerun needed | 0.9 | Previous run used a non-autoregressive scorer that did not activate last-token steering for completion tokens. |

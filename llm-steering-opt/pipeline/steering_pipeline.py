@@ -386,35 +386,35 @@ class SteeringPipeline:
         hook_infos: Optional[list] = None,
     ) -> float:
         """
-        Compute the mean per-token log-probability of `completion` given `prompt`.
-
-        Delegates to ``steering_opt.get_completion_logprob_hf``.  When
-        ``hook_infos`` is provided the forward pass runs inside
-        ``hf_hooks_contextmanager`` so the steering vector is active.
+        Compute the mean per-token log-probability of `completion` given
+        `prompt`, autoregressively. This matches the CAA/SparseCAA/QwenScopeCAA
+        full-answer metric and ensures hooks affect each next-token prediction.
 
         Returns:
             Mean log-prob per completion token (higher = model assigns more
             probability mass to this completion).
         """
-        if hook_infos:
-            with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
-                joint_lp, per_token_lps = steering_opt.get_completion_logprob_hf(
-                    self.model, prompt, completion, self.tokenizer,
-                    return_all_probs=True,
-                )
-        else:
-            joint_lp, per_token_lps = steering_opt.get_completion_logprob_hf(
-                self.model, prompt, completion, self.tokenizer,
-                return_all_probs=True,
-            )
-
-        if not per_token_lps:
+        completion_text = " " + completion.lstrip()
+        prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=True)
+        completion_ids = self.tokenizer.encode(completion_text, add_special_tokens=False)
+        if not completion_ids:
             return 0.0
 
-        # joint_lp is the sum; divide by token count for mean per-token
-        n_tokens = len(per_token_lps)
-        mean_lp = joint_lp.item() if isinstance(joint_lp, torch.Tensor) else float(joint_lp)
-        return mean_lp / n_tokens
+        device = next(self.model.parameters()).device
+        prefix_ids = list(prompt_ids)
+        per_token_lps = []
+
+        for token_id in completion_ids:
+            input_ids = torch.tensor([prefix_ids], device=device)
+            if hook_infos:
+                with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
+                    logits = self.model(input_ids).logits[0, -1, :]
+            else:
+                logits = self.model(input_ids).logits[0, -1, :]
+            per_token_lps.append(F.log_softmax(logits, dim=-1)[token_id].item())
+            prefix_ids.append(token_id)
+
+        return float(np.mean(per_token_lps)) if per_token_lps else 0.0
 
     def _stable_pos_is_a(self, row: dict) -> bool:
         key = row.get("id") or row.get("sample_id") or row.get("question", "")

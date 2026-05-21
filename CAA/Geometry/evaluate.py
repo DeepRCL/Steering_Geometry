@@ -19,23 +19,29 @@ def _mean_completion_logprob(
     prompt: str,
     completion: str,
 ) -> float:
+    """
+    Compute mean per-token log-probability autoregressively.
+
+    This is intentionally token-by-token rather than one full forward pass so
+    last-token steering methods such as SphericalSteer affect the prediction of
+    every completion token, matching generation-time behavior.
+    """
     completion_text = " " + completion.lstrip()
     prompt_ids = model_info.tokenizer.encode(prompt, add_special_tokens=True)
     completion_ids = model_info.tokenizer.encode(completion_text, add_special_tokens=False)
     if not completion_ids:
         return 0.0
 
-    input_ids = torch.tensor([prompt_ids + completion_ids]).to(model_info.device)
+    prefix_ids = list(prompt_ids)
+    token_logprobs = []
     with torch.no_grad():
-        logits = model_info.model(input_ids).logits
+        for token_id in completion_ids:
+            input_ids = torch.tensor([prefix_ids]).to(model_info.device)
+            logits = model_info.model(input_ids).logits[0, -1, :]
+            logprob = F.log_softmax(logits, dim=-1)[token_id].item()
+            token_logprobs.append(logprob)
+            prefix_ids.append(token_id)
 
-    logprobs = F.log_softmax(logits[0], dim=-1)
-    start = len(prompt_ids)
-    token_logprobs = [
-        logprobs[pos - 1, token_id].item()
-        for pos, token_id in enumerate(input_ids[0].tolist()[start:], start=start)
-        if pos > 0
-    ]
     return float(np.mean(token_logprobs)) if token_logprobs else 0.0
 
 

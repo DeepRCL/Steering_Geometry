@@ -258,23 +258,25 @@ def _mean_completion_logprob(
     completion: str,
     device: torch.device,
 ) -> float:
+    """
+    Compute mean per-token log-probability autoregressively so the metric
+    matches generation-time steering behavior.
+    """
     completion_text = " " + completion.lstrip()
     prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
     completion_ids = tokenizer.encode(completion_text, add_special_tokens=False)
     if not completion_ids:
         return 0.0
 
-    input_ids = torch.tensor([prompt_ids + completion_ids]).to(device)
+    prefix_ids = list(prompt_ids)
+    token_logprobs = []
     with torch.no_grad():
-        logits = model(input_ids).logits
+        for token_id in completion_ids:
+            input_ids = torch.tensor([prefix_ids]).to(device)
+            logits = model(input_ids).logits[0, -1, :]
+            token_logprobs.append(F.log_softmax(logits, dim=-1)[token_id].item())
+            prefix_ids.append(token_id)
 
-    logprobs = F.log_softmax(logits[0], dim=-1)
-    start = len(prompt_ids)
-    token_logprobs = [
-        logprobs[pos - 1, token_id].item()
-        for pos, token_id in enumerate(input_ids[0].tolist()[start:], start=start)
-        if pos > 0
-    ]
     return float(np.mean(token_logprobs)) if token_logprobs else 0.0
 
 

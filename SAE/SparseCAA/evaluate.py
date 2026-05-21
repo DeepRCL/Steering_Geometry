@@ -118,6 +118,61 @@ def _score_pair(
     }
 
 
+def _format_generation_prompt(pair: ContrastivePair, tokenizer, is_instruct: bool) -> str:
+    if is_instruct:
+        return tokenizer.apply_chat_template(
+            [{"role": "user", "content": pair.question}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+    return pair.question + "\nResponse:"
+
+
+def _mean_completion_logprob(
+    model,
+    tokenizer,
+    prompt: str,
+    completion: str,
+    device: torch.device,
+) -> float:
+    """Mean per-token log-probability computed autoregressively."""
+    completion_text = " " + completion.lstrip()
+    prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
+    completion_ids = tokenizer.encode(completion_text, add_special_tokens=False)
+    if not completion_ids:
+        return 0.0
+
+    prefix_ids = list(prompt_ids)
+    token_logprobs = []
+    with torch.no_grad():
+        for token_id in completion_ids:
+            input_ids = torch.tensor([prefix_ids]).to(device)
+            logits = model(input_ids).logits[0, -1, :]
+            token_logprobs.append(F.log_softmax(logits, dim=-1)[token_id].item())
+            prefix_ids.append(token_id)
+
+    return float(np.mean(token_logprobs)) if token_logprobs else 0.0
+
+
+def _score_full_logprob(
+    model,
+    tokenizer,
+    pair: ContrastivePair,
+    is_instruct: bool,
+    device: torch.device,
+) -> Dict[str, Any]:
+    prompt = _format_generation_prompt(pair, tokenizer, is_instruct)
+    lp_pos = _mean_completion_logprob(model, tokenizer, prompt, pair.positive_answer, device)
+    lp_neg = _mean_completion_logprob(model, tokenizer, prompt, pair.negative_answer, device)
+    margin = lp_pos - lp_neg
+    return {
+        "mean_logprob_positive": lp_pos,
+        "mean_logprob_negative": lp_neg,
+        "logprob_positive_margin": margin,
+        "is_correct": lp_pos > lp_neg,
+    }
+
+
 def _summarize(details: List[Dict[str, Any]]) -> Dict[str, Any]:
     if not details:
         return {"accuracy": 0.0, "num_eval": 0}
@@ -128,6 +183,57 @@ def _summarize(details: List[Dict[str, Any]]) -> Dict[str, Any]:
         "mean_prob_negative": float(np.mean([d["prob_negative"] for d in details])),
         "mean_positive_margin": float(np.mean([d["positive_margin"] for d in details])),
         "details": details,
+    }
+
+
+def _summarize_full_logprob(details: List[Dict[str, Any]]) -> Dict[str, Any]:
+    if not details:
+        return {"accuracy": 0.0, "num_eval": 0}
+    return {
+        "accuracy": float(np.mean([d["is_correct"] for d in details])),
+        "num_eval": len(details),
+        "mean_logprob_positive": float(np.mean([d["mean_logprob_positive"] for d in details])),
+        "mean_logprob_negative": float(np.mean([d["mean_logprob_negative"] for d in details])),
+        "mean_logprob_positive_margin": float(np.mean([d["logprob_positive_margin"] for d in details])),
+        "details": details,
+    }
+
+
+def _metric_summary(
+    results_all: Dict,
+    config: SparseCAAPipelineConfig,
+    baseline_key: str,
+    steered_key: str,
+    metric_name: str,
+) -> Dict[str, Any]:
+    value_order = [v for v in SCHWARTZ_CIRCUMPLEX_ORDER if v in results_all]
+    alpha_labels = [str(a) for a in config.alpha_values]
+    baseline_acc = np.array([results_all[v][baseline_key]["accuracy"] for v in value_order])
+    steered_acc = np.array(
+        [[results_all[v][steered_key][a]["accuracy"] for a in alpha_labels] for v in value_order]
+    )
+    acc_gain = steered_acc - baseline_acc[:, None]
+    mean_steered = steered_acc.mean(axis=0)
+    mean_gain = acc_gain.mean(axis=0)
+    best_idx = int(np.argmax(mean_gain))
+
+    return {
+        "metric": metric_name,
+        "layer": config.mlp_layer,
+        "alpha_values": config.alpha_values,
+        "mean_baseline_accuracy": float(baseline_acc.mean()),
+        "mean_steered_accuracy_by_alpha": {
+            alpha: float(mean_steered[idx]) for idx, alpha in enumerate(alpha_labels)
+        },
+        "mean_accuracy_gain_by_alpha": {
+            alpha: float(mean_gain[idx]) for idx, alpha in enumerate(alpha_labels)
+        },
+        "best_overall_alpha_by_mean_accuracy_gain": {
+            "alpha": alpha_labels[best_idx],
+            "mean_accuracy_gain_vs_baseline": float(mean_gain[best_idx]),
+            "mean_accuracy_at_alpha": float(mean_steered[best_idx]),
+            "mean_baseline_accuracy": float(baseline_acc.mean()),
+        },
     }
 
 
@@ -275,14 +381,21 @@ def evaluate_sparse_steering(
 
         # Baseline (no steering)
         baseline_details = []
+        baseline_logprob_details = []
         for pair in eval_pairs:
             tokens, a_id, b_id = format_eval_prompt(pair, tokenizer, is_instruct)
             result = _score_pair(model, tokens, a_id, b_id, pair.pos_is_a, device)
             result["sample_id"] = pair.sample_id
             baseline_details.append(result)
+
+            lp_result = _score_full_logprob(model, tokenizer, pair, is_instruct, device)
+            lp_result["sample_id"] = pair.sample_id
+            baseline_logprob_details.append(lp_result)
         baseline_summary = _summarize(baseline_details)
+        baseline_logprob_summary = _summarize_full_logprob(baseline_logprob_details)
 
         steered_results: Dict = {}
+        steered_logprob_results: Dict = {}
 
         for alpha in config.alpha_values:
             hook_fn = make_sparse_steer_hook(sae, persona_vec, alpha, config.d_in)
@@ -291,7 +404,8 @@ def evaluate_sparse_steering(
             try:
                 print(f"  {val} (alpha={alpha}) …")
                 steered_details = []
-                for pair, bsl in zip(eval_pairs, baseline_details):
+                steered_logprob_details = []
+                for pair, bsl, bsl_lp in zip(eval_pairs, baseline_details, baseline_logprob_details):
                     tokens, a_id, b_id = format_eval_prompt(pair, tokenizer, is_instruct)
                     detail = _score_pair(model, tokens, a_id, b_id, pair.pos_is_a, device)
                     detail["sample_id"] = pair.sample_id
@@ -311,6 +425,29 @@ def evaluate_sparse_steering(
                         bsl["is_correct"] and not detail["is_correct"]
                     )
                     steered_details.append(detail)
+
+                    lp_detail = _score_full_logprob(model, tokenizer, pair, is_instruct, device)
+                    lp_detail["sample_id"] = pair.sample_id
+                    lp_detail["baseline_mean_logprob_positive"] = bsl_lp["mean_logprob_positive"]
+                    lp_detail["baseline_mean_logprob_negative"] = bsl_lp["mean_logprob_negative"]
+                    lp_detail["baseline_logprob_positive_margin"] = bsl_lp["logprob_positive_margin"]
+                    lp_detail["baseline_is_correct"] = bsl_lp["is_correct"]
+                    lp_detail["delta_logprob_positive"] = (
+                        lp_detail["mean_logprob_positive"] - bsl_lp["mean_logprob_positive"]
+                    )
+                    lp_detail["delta_logprob_negative"] = (
+                        lp_detail["mean_logprob_negative"] - bsl_lp["mean_logprob_negative"]
+                    )
+                    lp_detail["delta_logprob_positive_margin"] = (
+                        lp_detail["logprob_positive_margin"] - bsl_lp["logprob_positive_margin"]
+                    )
+                    lp_detail["became_correct"] = (
+                        not bsl_lp["is_correct"] and lp_detail["is_correct"]
+                    )
+                    lp_detail["became_incorrect"] = (
+                        bsl_lp["is_correct"] and not lp_detail["is_correct"]
+                    )
+                    steered_logprob_details.append(lp_detail)
             finally:
                 handle.remove()
 
@@ -328,14 +465,57 @@ def evaluate_sparse_steering(
             )
             steered_results[str(alpha)] = steered_summary
 
+            steered_logprob_summary = _summarize_full_logprob(steered_logprob_details)
+            steered_logprob_summary["accuracy_gain_vs_baseline"] = (
+                steered_logprob_summary["accuracy"] - baseline_logprob_summary["accuracy"]
+            )
+            steered_logprob_summary["mean_logprob_positive_gain_vs_baseline"] = (
+                steered_logprob_summary["mean_logprob_positive"]
+                - baseline_logprob_summary["mean_logprob_positive"]
+            )
+            steered_logprob_summary["mean_logprob_positive_margin_gain_vs_baseline"] = (
+                steered_logprob_summary["mean_logprob_positive_margin"]
+                - baseline_logprob_summary["mean_logprob_positive_margin"]
+            )
+            steered_logprob_results[str(alpha)] = steered_logprob_summary
+
         results_all[val] = {
             "baseline": baseline_summary,
             "steered": steered_results,
+            "baseline_full_logprob": baseline_logprob_summary,
+            "steered_full_logprob": steered_logprob_results,
         }
 
     # ── Save results ──────────────────────────────────────────────────────────
     with open(out_path, "w") as f:
         json.dump(results_all, f, indent=2)
+
+    with open(os.path.join(out_dir, "eval_results_full_logprob.json"), "w") as f:
+        json.dump(
+            {
+                val: {
+                    "baseline": payload["baseline_full_logprob"],
+                    "steered": payload["steered_full_logprob"],
+                }
+                for val, payload in results_all.items()
+            },
+            f,
+            indent=2,
+        )
+
+    ab_summary = _metric_summary(results_all, config, "baseline", "steered", "ab_next_token")
+    full_logprob_summary = _metric_summary(
+        results_all,
+        config,
+        "baseline_full_logprob",
+        "steered_full_logprob",
+        "full_answer_mean_logprob",
+    )
+    ab_summary["full_answer_mean_logprob"] = full_logprob_summary
+    with open(os.path.join(out_dir, "evaluation_summary.json"), "w") as f:
+        json.dump(ab_summary, f, indent=2)
+    with open(os.path.join(out_dir, "evaluation_summary_full_logprob.json"), "w") as f:
+        json.dump(full_logprob_summary, f, indent=2)
 
     _save_eval_plots(results_all, config, out_dir)
     print(f"Evaluation complete. Results → {out_dir}")
