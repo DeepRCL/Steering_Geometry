@@ -28,15 +28,27 @@ import torch
 import numpy as np
 from tqdm import tqdm
 
-# Add project root to path so odesteer imports work
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+# Path setup: Schwartz scripts and odesteer src must precede repo root so
+# ``import config`` resolves to ``scripts/schwartz/config.py``, not repo ``config.py``.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_SCHWARTZ_DIR = str(_SCRIPT_DIR)
+_ODESTEER_SRC = str(_SCRIPT_DIR.parents[2] / "src")
+_REPO_ROOT = str(_SCRIPT_DIR.parents[2])  # …/Steering_Geometry
+
+for _path in (_SCHWARTZ_DIR, _ODESTEER_SRC):
+    if _path not in sys.path:
+        sys.path.insert(0, _path)
 
 from odesteer.lm import HuggingFaceLM
 from odesteer.steer import get_steer_model
 from odesteer.utils import get_project_dir
 
-import config  # type: ignore
-import geometry as geometry_module  # type: ignore
+import config  # noqa: E402 — scripts/schwartz/config.py
+import geometry as geometry_module  # noqa: E402
+
+if _REPO_ROOT not in sys.path:
+    sys.path.append(_REPO_ROOT)
+from shared import schwartz_eval  # noqa: E402
 
 
 def parse_args():
@@ -79,6 +91,13 @@ def parse_args():
 
     # Evaluation
     parser.add_argument("--n_eval_samples", type=int)
+    parser.add_argument(
+        "--eval_metric",
+        type=str,
+        default="full_logprob",
+        choices=["full_logprob", "ab_next_token"],
+        help="Steering eval: full-answer logprob or CAA-style A/B next-token",
+    )
     parser.add_argument("--skip_eval", action="store_true")
 
     # Output
@@ -282,6 +301,43 @@ def train_all_values(
 # ─── Evaluation (using ODESteer's compute_answer_prob) ──────────────────────
 
 @torch.no_grad()
+def _score_ab_next_token(
+    hf_lm: HuggingFaceLM,
+    row: dict,
+    model_name: str,
+    seed: int,
+    steer_T: float,
+    steer: bool = False,
+) -> dict:
+    """CAA-style P(A) vs P(B) at the last prompt position."""
+    pos_is_a = schwartz_eval.stable_pos_is_a(row, seed)
+    prompt = schwartz_eval.format_ab_eval_prompt(
+        row["question"],
+        row["positive_answer"],
+        row["negative_answer"],
+        pos_is_a,
+        hf_lm.tokenizer,
+        model_name,
+    )
+    input_ids = hf_lm.tokenizer(
+        prompt, return_tensors="pt"
+    ).input_ids.to(hf_lm.model.device)
+    prompt_len = input_ids.shape[1]
+
+    if steer and hf_lm.steer_model is not None:
+        hf_lm.register_steer_prob_hook(prompt_len - 1, {"T": steer_T})
+        logits = hf_lm.model(input_ids).logits
+        hf_lm.remove_steer_prob_hook()
+    else:
+        logits = hf_lm.model(input_ids).logits
+
+    a_id, b_id = schwartz_eval.ab_token_ids(hf_lm.tokenizer)
+    return schwartz_eval.score_ab_from_logits(
+        logits[0, -1, :], a_id, b_id, pos_is_a
+    )
+
+
+@torch.no_grad()
 def evaluate_steering(
     hf_lm: HuggingFaceLM,
     steer_models: Dict[str, Any],
@@ -290,16 +346,13 @@ def evaluate_steering(
     args,
     verbose: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Evaluate steering using log-probabilities on the validation set.
+    """Evaluate steering on the validation set (metric chosen via ``args.eval_metric``)."""
+    eval_metric = getattr(args, "eval_metric", schwartz_eval.EVAL_METRIC_FULL_LOGPROB)
+    use_ab = eval_metric == schwartz_eval.EVAL_METRIC_AB_NEXT_TOKEN
 
-    For each value and each validation sample we compute the mean per-token 
-    log-probability of the positive and negative completions, both with and 
-    without steering.
-    """
     if verbose:
         print("─" * 60)
-        print("  Steering Evaluation (Log-Likelihood on Validation Set)")
+        print(f"  Steering Evaluation ({schwartz_eval.eval_metric_label(eval_metric)})")
         print("─" * 60)
 
     records = []
@@ -310,18 +363,18 @@ def evaluate_steering(
         prompt_len = tokenizer(prompt, return_tensors="pt").input_ids.shape[1]
         full_prompt = prompt + completion
         full_inputs = tokenizer(full_prompt, return_tensors="pt").to(hf_lm.model.device)
-        
+
         if steer and hf_lm.steer_model is not None:
             hf_lm.register_steer_prob_hook(prompt_len - 1, {"T": args.T})
             outputs = hf_lm.model(**full_inputs)
             hf_lm.remove_steer_prob_hook()
         else:
             outputs = hf_lm.model(**full_inputs)
-            
+
         answer_ids = full_inputs.input_ids[0, prompt_len:]
         if len(answer_ids) == 0:
             return 0.0
-        answer_logits = outputs.logits[0, prompt_len-1:-1]
+        answer_logits = outputs.logits[0, prompt_len - 1:-1]
         full_log_probs = torch.nn.functional.log_softmax(answer_logits, dim=-1)
         token_log_probs = full_log_probs.gather(-1, answer_ids.unsqueeze(-1)).squeeze(-1)
         return token_log_probs.sum().item() / len(answer_ids)
@@ -334,37 +387,44 @@ def evaluate_steering(
             rng = random.Random(args.seed)
             value_val_rows = rng.sample(value_val_rows, args.n_eval_samples)
 
-        # Temporarily set the steer model on HuggingFaceLM
         hf_lm.steer_model = steer_models[value]
 
         if verbose:
             print(f"  {value} ({len(value_val_rows)} samples) ...")
 
         for row in tqdm(value_val_rows, desc=f"Eval: {value}", leave=False):
-            question = row["question"]
-            pos = row["positive_answer"]
-            neg = row["negative_answer"]
-            
-            prompt_template = "Q: {question}\nA: "
-            prompt = prompt_template.format(question=question)
+            rec = {"value": value}
 
-            # Baseline (no steering)
-            lp_pos_base = _compute_logprob(prompt, pos, steer=False)
-            lp_neg_base = _compute_logprob(prompt, neg, steer=False)
+            if use_ab:
+                ab_base = _score_ab_next_token(
+                    hf_lm, row, args.model, args.seed, args.T, steer=False
+                )
+                ab_steer = _score_ab_next_token(
+                    hf_lm, row, args.model, args.seed, args.T, steer=True
+                )
+                rec.update({
+                    "ab_prob_positive_base": ab_base["prob_positive"],
+                    "ab_prob_negative_base": ab_base["prob_negative"],
+                    "ab_margin_base": ab_base["positive_margin"],
+                    "ab_correct_base": ab_base["is_correct"],
+                    "ab_prob_positive_steer": ab_steer["prob_positive"],
+                    "ab_prob_negative_steer": ab_steer["prob_negative"],
+                    "ab_margin_steer": ab_steer["positive_margin"],
+                    "ab_correct_steer": ab_steer["is_correct"],
+                })
+            else:
+                prompt = f"Q: {row['question']}\nA: "
+                pos = row["positive_answer"]
+                neg = row["negative_answer"]
+                rec.update({
+                    "lp_pos_base": _compute_logprob(prompt, pos, steer=False),
+                    "lp_neg_base": _compute_logprob(prompt, neg, steer=False),
+                    "lp_pos_steer": _compute_logprob(prompt, pos, steer=True),
+                    "lp_neg_steer": _compute_logprob(prompt, neg, steer=True),
+                })
 
-            # Steered
-            lp_pos_steer = _compute_logprob(prompt, pos, steer=True)
-            lp_neg_steer = _compute_logprob(prompt, neg, steer=True)
+            records.append(rec)
 
-            records.append({
-                "value": value,
-                "lp_pos_base": lp_pos_base,
-                "lp_neg_base": lp_neg_base,
-                "lp_pos_steer": lp_pos_steer,
-                "lp_neg_steer": lp_neg_steer,
-            })
-
-    # Reset steer model
     hf_lm.steer_model = None
 
     if not records:
@@ -372,50 +432,39 @@ def evaluate_steering(
             print("  WARNING: no evaluation records!")
         return {}
 
-    def _metrics(recs):
-        n = len(recs)
-        cb = sum(1 for r in recs if r["lp_pos_base"] > r["lp_neg_base"])
-        cs = sum(1 for r in recs if r["lp_pos_steer"] > r["lp_neg_steer"])
-        delta_lp = [
-            (r["lp_pos_steer"] - r["lp_neg_steer"]) - 
-            (r["lp_pos_base"] - r["lp_neg_base"])
-            for r in recs
-        ]
-        return {
-            "n_samples": n,
-            "accuracy_baseline": round(cb / n, 4),
-            "accuracy_steered": round(cs / n, 4),
-            "delta_accuracy": round((cs - cb) / n, 4),
-            "mean_delta_logprob": round(float(np.mean(delta_lp)), 6),
-            "std_delta_logprob": round(float(np.std(delta_lp)), 6),
-            "mean_lp_pos_baseline": round(float(np.mean([r["lp_pos_base"] for r in recs])), 6),
-            "mean_lp_pos_steered": round(float(np.mean([r["lp_pos_steer"] for r in recs])), 6),
-            "mean_lp_neg_baseline": round(float(np.mean([r["lp_neg_base"] for r in recs])), 6),
-            "mean_lp_neg_steered": round(float(np.mean([r["lp_neg_steer"] for r in recs])), 6),
-        }
-
-    overall = _metrics(records)
-    per_value = {}
-    for value in values:
-        vrecs = [r for r in records if r["value"] == value]
-        if vrecs:
-            per_value[value] = _metrics(vrecs)
+    eval_payload = schwartz_eval.build_eval_payload(
+        eval_metric,
+        records,
+        values,
+        extra_fields={"T": args.T, "steer_type": args.steer_type},
+    )
+    per_value = eval_payload["per_value"]
+    overall = eval_payload["overall"]
+    delta_key = (
+        "mean_delta_positive_margin"
+        if use_ab
+        else "mean_delta_logprob"
+    )
 
     if verbose:
-        print(f"\n  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} {'Δ Acc':>7} {'Δ logP':>9}")
+        print(f"\n  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} {'Δ Acc':>7} {'Δ':>9}")
         print("  " + "-" * 75)
         for value in values:
             if value not in per_value:
                 continue
             m = per_value[value]
-            print(f"  {value:<35} {m['accuracy_baseline']:>9.1%} "
-                  f"{m['accuracy_steered']:>10.1%} {m['delta_accuracy']:>+7.1%} "
-                  f"{m['mean_delta_logprob']:>+9.4f}")
+            print(
+                f"  {value:<35} {m['accuracy_baseline']:>9.1%} "
+                f"{m['accuracy_steered']:>10.1%} {m['delta_accuracy']:>+7.1%} "
+                f"{m.get(delta_key, 0):>+9.4f}"
+            )
         print("  " + "-" * 75)
         o = overall
-        print(f"  {'OVERALL':<35} {o['accuracy_baseline']:>9.1%} "
-              f"{o['accuracy_steered']:>10.1%} {o['delta_accuracy']:>+7.1%} "
-              f"{o['mean_delta_logprob']:>+9.4f}\n")
+        print(
+            f"  {'OVERALL':<35} {o['accuracy_baseline']:>9.1%} "
+            f"{o['accuracy_steered']:>10.1%} {o['delta_accuracy']:>+7.1%} "
+            f"{o.get(delta_key, 0):>+9.4f}\n"
+        )
 
     def _plot_eval_accuracy(per_val: Dict[str, dict], ovr: dict, out_dir: str, vals: List[str]):
         try:
@@ -441,7 +490,9 @@ def evaluate_steering(
 
         ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.5, label="Chance (50%)")
         ax.set_ylabel("Accuracy (positive preferred)")
-        ax.set_title("Baseline vs Steered Accuracy per Value")
+        ax.set_title(
+            f"ODESteer — {schwartz_eval.eval_metric_label(eval_metric)}"
+        )
         ax.set_xticks(x)
         ax.set_xticklabels(labels, rotation=45, ha="right")
         ax.legend()
@@ -456,7 +507,7 @@ def evaluate_steering(
     if args.output_dir:
         _plot_eval_accuracy(per_value, overall, args.output_dir, values)
 
-    return {"T": args.T, "steer_type": args.steer_type, "overall": overall, "per_value": per_value}
+    return eval_payload
 
 
 # ─── Save Helpers ────────────────────────────────────────────────────────────

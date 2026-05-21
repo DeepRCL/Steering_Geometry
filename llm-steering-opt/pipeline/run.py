@@ -77,6 +77,13 @@ def parse_args():
                         help="Training samples per value (None = all)")
 
     # Evaluation
+    parser.add_argument(
+        "--eval_metric",
+        type=str,
+        default=SteeringConfig.eval_metric,
+        choices=["full_logprob", "ab_next_token"],
+        help="Steering eval: full-answer logprob or CAA-style A/B next-token",
+    )
     parser.add_argument("--n_eval_samples", type=int, default=None,
                         help="Validation samples per value for steering evaluation (None = all)")
 
@@ -116,6 +123,7 @@ def main():
         max_iters=args.max_iters,
         max_norm=args.max_norm,
         n_training_samples=args.n_training_samples,
+        eval_metric=args.eval_metric,
         n_eval_samples=args.n_eval_samples,
         alpha=args.alpha,
         output_dir=args.output_dir,

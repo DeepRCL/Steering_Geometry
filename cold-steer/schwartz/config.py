@@ -104,6 +104,8 @@ class SchwartzColdConfig:
     n_training_samples: int = 50
 
     # Behavioral evaluation
+    # ``full_logprob`` or ``ab_next_token`` (CAA-style MCQ)
+    eval_metric: str = "full_logprob"
     n_eval_samples: Optional[int] = 30
 
     # Output
@@ -114,6 +116,10 @@ class SchwartzColdConfig:
     def __post_init__(self):
         if self.method not in ("cold_fd", "cold_kernel"):
             raise ValueError(f"Unknown method {self.method!r}; use cold_fd or cold_kernel")
+        if self.eval_metric not in ("full_logprob", "ab_next_token"):
+            raise ValueError(
+                f"eval_metric must be 'full_logprob' or 'ab_next_token', got {self.eval_metric!r}"
+            )
         Path(self.output_dir).mkdir(parents=True, exist_ok=True)
 
     def get_dtype(self):
