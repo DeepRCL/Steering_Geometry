@@ -28,12 +28,12 @@ import torch
 import numpy as np
 from tqdm import tqdm
 
-# Path setup: Schwartz scripts and odesteer src must precede repo root so
-# ``import config`` resolves to ``scripts/schwartz/config.py``, not repo ``config.py``.
+# Path setup: scripts/schwartz and odesteer src must precede everything else so
+# ``import config`` resolves to ``scripts/schwartz/config.py`` (not the repo
+# top-level ``config.py``), and so ``schwartz_eval`` resolves locally.
 _SCRIPT_DIR = Path(__file__).resolve().parent
 _SCHWARTZ_DIR = str(_SCRIPT_DIR)
 _ODESTEER_SRC = str(_SCRIPT_DIR.parents[2] / "src")
-_REPO_ROOT = str(_SCRIPT_DIR.parents[2])  # …/Steering_Geometry
 
 for _path in (_SCHWARTZ_DIR, _ODESTEER_SRC):
     if _path not in sys.path:
@@ -45,10 +45,7 @@ from odesteer.utils import get_project_dir
 
 import config  # noqa: E402 — scripts/schwartz/config.py
 import geometry as geometry_module  # noqa: E402
-
-if _REPO_ROOT not in sys.path:
-    sys.path.append(_REPO_ROOT)
-from shared import schwartz_eval  # noqa: E402
+import schwartz_eval  # noqa: E402 — scripts/schwartz/schwartz_eval.py (self-contained)
 
 
 def parse_args():
@@ -308,43 +305,11 @@ def train_all_values(
     return vectors, steer_models, train_info
 
 
-# ─── Evaluation (using ODESteer's compute_answer_prob) ──────────────────────
-
-@torch.no_grad()
-def _score_ab_next_token(
-    hf_lm: HuggingFaceLM,
-    row: dict,
-    model_name: str,
-    seed: int,
-    steer_T: float,
-    steer: bool = False,
-) -> dict:
-    """CAA Geometry ``_score_instance``: P(A) vs P(B) at last prompt position."""
-    pos_is_a = schwartz_eval.eval_pos_is_a(row, seed)
-    tokens, a_id, b_id = schwartz_eval.format_ab_eval_tokens(
-        row["question"],
-        row["positive_answer"],
-        row["negative_answer"],
-        pos_is_a,
-        hf_lm.tokenizer,
-        model_name,
-    )
-    input_ids = torch.tensor([tokens]).to(hf_lm.model.device)
-
-    if steer and hf_lm.steer_model is not None:
-        prompt_len = input_ids.shape[1]
-        hf_lm.register_steer_prob_hook(prompt_len - 1, {"T": steer_T})
-        logits = hf_lm.model(input_ids).logits
-        hf_lm.remove_steer_prob_hook()
-    else:
-        logits = hf_lm.model(input_ids).logits
-
-    return schwartz_eval.score_ab_from_logits(
-        logits[0, -1, :], a_id, b_id, pos_is_a
-    )
+# ─── Evaluation ──────────────────────────────────────────────────────────────
+# All evaluation logic lives in ``schwartz_eval.py`` (single self-contained
+# file). Re-exported here as a thin wrapper so call-sites stay unchanged.
 
 
-@torch.no_grad()
 def evaluate_steering(
     hf_lm: HuggingFaceLM,
     steer_models: Dict[str, Any],
@@ -353,174 +318,16 @@ def evaluate_steering(
     args,
     verbose: bool = True,
 ) -> Dict[str, Any]:
-    """Evaluate steering on the validation set (metric chosen via ``args.eval_metric``)."""
-    eval_metric = getattr(args, "eval_metric", schwartz_eval.EVAL_METRIC_FULL_LOGPROB)
-    use_ab = eval_metric == schwartz_eval.EVAL_METRIC_AB_NEXT_TOKEN
-
-    if verbose:
-        print("─" * 60)
-        print(f"  Steering Evaluation ({schwartz_eval.eval_metric_label(eval_metric)})")
-        print("─" * 60)
-
-    records = []
-    eval_values = [v for v in values if v in steer_models]
-
-    if use_ab:
-        schwartz_eval.assign_pos_is_a_caa(
-            val_rows, config.SCHWARTZ_CIRCUMPLEX_ORDER, args.seed
-        )
-
-    def _compute_logprob(prompt: str, completion: str, steer: bool = False) -> float:
-        tokenizer = hf_lm.tokenizer
-        device = hf_lm.model.device
-        full_inputs, prompt_len, answer_ids = schwartz_eval.prepare_qa_completion_inputs(
-            tokenizer, prompt, completion, device
-        )
-
-        if steer and hf_lm.steer_model is not None:
-            hf_lm.register_steer_prob_hook(prompt_len - 1, {"T": args.T})
-            outputs = hf_lm.model(**full_inputs)
-            hf_lm.remove_steer_prob_hook()
-        else:
-            outputs = hf_lm.model(**full_inputs)
-
-        return schwartz_eval.mean_completion_logprob_from_logits(
-            outputs.logits[0], prompt_len, answer_ids
-        )
-
-    for value in eval_values:
-        value_val_rows = config.get_rows_for_value(val_rows, value)
-        if not value_val_rows:
-            continue
-        if args.n_eval_samples and args.n_eval_samples < len(value_val_rows):
-            rng = random.Random(args.seed)
-            value_val_rows = rng.sample(value_val_rows, args.n_eval_samples)
-
-        hf_lm.steer_model = steer_models[value]
-
-        if verbose:
-            print(f"  {value} ({len(value_val_rows)} samples) ...")
-
-        for row in tqdm(value_val_rows, desc=f"Eval: {value}", leave=False):
-            rec = {"value": value}
-
-            if use_ab:
-                ab_base = _score_ab_next_token(
-                    hf_lm, row, args.model, args.seed, args.T, steer=False
-                )
-                ab_steer = _score_ab_next_token(
-                    hf_lm, row, args.model, args.seed, args.T, steer=True
-                )
-                rec.update({
-                    "ab_prob_positive_base": ab_base["prob_positive"],
-                    "ab_prob_negative_base": ab_base["prob_negative"],
-                    "ab_margin_base": ab_base["positive_margin"],
-                    "ab_correct_base": ab_base["is_correct"],
-                    "ab_prob_positive_steer": ab_steer["prob_positive"],
-                    "ab_prob_negative_steer": ab_steer["prob_negative"],
-                    "ab_margin_steer": ab_steer["positive_margin"],
-                    "ab_correct_steer": ab_steer["is_correct"],
-                })
-            else:
-                prompt = schwartz_eval.format_qa_eval_prompt(
-                    row["question"],
-                    tokenizer=hf_lm.tokenizer,
-                    model_name=args.model,
-                )
-                pos = row["positive_answer"]
-                neg = row["negative_answer"]
-                rec.update({
-                    "lp_pos_base": _compute_logprob(prompt, pos, steer=False),
-                    "lp_neg_base": _compute_logprob(prompt, neg, steer=False),
-                    "lp_pos_steer": _compute_logprob(prompt, pos, steer=True),
-                    "lp_neg_steer": _compute_logprob(prompt, neg, steer=True),
-                })
-
-            records.append(rec)
-
-    hf_lm.steer_model = None
-
-    if not records:
-        if verbose:
-            print("  WARNING: no evaluation records!")
-        return {}
-
-    eval_payload = schwartz_eval.build_eval_payload(
-        eval_metric,
-        records,
+    """See ``schwartz_eval.evaluate_steering`` for the implementation."""
+    return schwartz_eval.evaluate_steering(
+        hf_lm,
+        steer_models,
+        val_rows,
         values,
-        extra_fields={"T": args.T, "steer_type": args.steer_type},
+        args,
+        get_rows_for_value=config.get_rows_for_value,
+        verbose=verbose,
     )
-    per_value = eval_payload["per_value"]
-    overall = eval_payload["overall"]
-    delta_key = (
-        "mean_delta_positive_margin"
-        if use_ab
-        else "mean_delta_logprob"
-    )
-
-    if verbose:
-        print(f"\n  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} {'Δ Acc':>7} {'Δ':>9}")
-        print("  " + "-" * 75)
-        for value in values:
-            if value not in per_value:
-                continue
-            m = per_value[value]
-            print(
-                f"  {value:<35} {m['accuracy_baseline']:>9.1%} "
-                f"{m['accuracy_steered']:>10.1%} {m['delta_accuracy']:>+7.1%} "
-                f"{m.get(delta_key, 0):>+9.4f}"
-            )
-        print("  " + "-" * 75)
-        o = overall
-        print(
-            f"  {'OVERALL':<35} {o['accuracy_baseline']:>9.1%} "
-            f"{o['accuracy_steered']:>10.1%} {o['delta_accuracy']:>+7.1%} "
-            f"{o.get(delta_key, 0):>+9.4f}\n"
-        )
-
-    def _plot_eval_accuracy(per_val: Dict[str, dict], ovr: dict, out_dir: str, vals: List[str]):
-        try:
-            import matplotlib.pyplot as plt
-        except ImportError:
-            if verbose:
-                print("  matplotlib not installed, skipping evaluation plot.")
-            return
-
-        labels = [v for v in vals if v in per_val]
-        if not labels:
-            return
-
-        base_accs = [per_val[v]["accuracy_baseline"] for v in labels]
-        steer_accs = [per_val[v]["accuracy_steered"] for v in labels]
-
-        x = np.arange(len(labels))
-        width = 0.35
-
-        fig, ax = plt.subplots(figsize=(max(12, len(labels) * 0.9), 6))
-        ax.bar(x - width / 2, base_accs, width, label="Baseline", color="#90CAF9", edgecolor="#1565C0")
-        ax.bar(x + width / 2, steer_accs, width, label="Steered", color="#A5D6A7", edgecolor="#2E7D32")
-
-        ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.5, label="Chance (50%)")
-        ax.set_ylabel("Accuracy (positive preferred)")
-        ax.set_title(
-            f"ODESteer — {schwartz_eval.eval_metric_label(eval_metric)}"
-        )
-        ax.set_xticks(x)
-        ax.set_xticklabels(labels, rotation=45, ha="right")
-        ax.legend()
-
-        plt.tight_layout()
-        plot_path = os.path.join(out_dir, "steering_eval_accuracy.png")
-        fig.savefig(plot_path, dpi=300, bbox_inches="tight")
-        plt.close(fig)
-        if verbose:
-            print(f"  Saved evaluation plot → {plot_path}")
-
-    if args.output_dir:
-        _plot_eval_accuracy(per_value, overall, args.output_dir, values)
-
-    return eval_payload
 
 
 # ─── Save Helpers ────────────────────────────────────────────────────────────

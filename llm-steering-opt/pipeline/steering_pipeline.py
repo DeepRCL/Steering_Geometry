@@ -34,13 +34,9 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Wedge
 from tqdm import tqdm
 
-# Ensure steering_opt and repo-root shared utils are importable
+# Ensure steering_opt at the repo root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
 import steering_opt
-from shared import schwartz_eval
 
 from .config import (
     SteeringConfig,
@@ -50,6 +46,7 @@ from .config import (
     value_to_group,
 )
 from . import data_utils
+from . import schwartz_eval
 
 # ─── Plotting Constants ──────────────────────────────────────────────────────
 PLOT_LABEL_FONTSIZE = 13
@@ -402,255 +399,36 @@ class SteeringPipeline:
         self._log(f"\n  Trained {len(vectors)}/{len(self.values)} vectors\n")
         return vectors
 
-    # ─── Steering Evaluation (Log-Likelihood) ─────────────────────────
-
-    @torch.no_grad()
-    def _compute_logprob(
-        self,
-        prompt: str,
-        completion: str,
-        hook_infos: Optional[list] = None,
-    ) -> float:
-        """
-        Mean per-token logprob of ``completion`` given ``prompt`` (ODESteer eval).
-
-        Single forward on ``prompt + completion``; hooks apply to the full pass.
-        """
-        device = next(self.model.parameters()).device
-        full_inputs, prompt_len, answer_ids = schwartz_eval.prepare_qa_completion_inputs(
-            self.tokenizer, prompt, completion, device
-        )
-        if hook_infos:
-            with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
-                outputs = self.model(
-                    input_ids=full_inputs.input_ids,
-                    attention_mask=full_inputs.get("attention_mask"),
-                )
-        else:
-            outputs = self.model(
-                input_ids=full_inputs.input_ids,
-                attention_mask=full_inputs.get("attention_mask"),
-            )
-        return schwartz_eval.mean_completion_logprob_from_logits(
-            outputs.logits[0], prompt_len, answer_ids
-        )
-
-    @torch.no_grad()
-    def _score_ab_next_token(
-        self,
-        row: dict,
-        hook_infos: Optional[list] = None,
-    ) -> dict:
-        pos_is_a = schwartz_eval.eval_pos_is_a(row, self.config.random_seed)
-        tokens, a_token_id, b_token_id = schwartz_eval.format_ab_eval_tokens(
-            row["question"],
-            row["positive_answer"],
-            row["negative_answer"],
-            pos_is_a,
-            self.tokenizer,
-            self.config.model_name,
-        )
-        input_ids = torch.tensor([tokens], device=self.config.device)
-
-        if hook_infos:
-            with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
-                logits = self.model(input_ids).logits
-        else:
-            logits = self.model(input_ids).logits
-
-        return schwartz_eval.score_ab_from_logits(
-            logits[0, -1, :], a_token_id, b_token_id, pos_is_a
-        )
+    # ─── Steering Evaluation ───────────────────────────────────────────
 
     def evaluate_steering(
         self,
         vectors: Dict[str, torch.Tensor],
         layer: Union[int, List[int]],
     ) -> Dict[str, Any]:
+        """Evaluate steering vectors on the held-out validation set.
+
+        Delegates to :mod:`pipeline.schwartz_eval`. Metric is selected via
+        ``config.eval_metric`` (``full_logprob`` or ``ab_next_token``).
         """
-        Evaluate steering vectors on the held-out validation set.
-
-        Metric is selected via ``config.eval_metric``:
-
-        - ``full_logprob``: mean per-token logprob of positive vs negative answer.
-        - ``ab_next_token``: CAA-style P(A) vs P(B) on an MCQ prompt ending in ``" ("``.
-        """
-        eval_metric = self.config.eval_metric
-        metric_label = schwartz_eval.eval_metric_label(eval_metric)
-        self._log("\n" + "─" * 60)
-        self._log(f"  Steering Evaluation ({metric_label})")
-        self._log("─" * 60)
-
-        layers = self._normalize_layers(layer)
-        alpha = self.config.alpha
-        n_eval = self.config.n_eval_samples
-        use_ab = eval_metric == schwartz_eval.EVAL_METRIC_AB_NEXT_TOKEN
-
-        records: List[dict] = []
-        eval_values = [v for v in self.values if v in vectors]
-
-        if use_ab:
-            schwartz_eval.assign_pos_is_a_caa(
-                self.val_rows, SCHWARTZ_CIRCUMPLEX_ORDER, self.config.random_seed
-            )
-
-        for value in eval_values:
-            vec = vectors[value].detach().to(self.config.device)
-            scaled_vec = alpha * vec
-            hook_fn = steering_opt.make_steering_hook_hf(scaled_vec)
-            hook_infos = [(l, hook_fn) for l in layers]
-
-            val_rows = data_utils.get_rows_for_value(self.val_rows, value)
-            if not val_rows:
-                self._log(f"  {value}: no validation rows – skipping")
-                continue
-
-            if n_eval is not None and n_eval < len(val_rows):
-                rng = random.Random(self.config.random_seed)
-                val_rows = rng.sample(val_rows, n_eval)
-
-            self._log(f"  Evaluating {value} ({len(val_rows)} samples) ...")
-
-            pbar = tqdm(val_rows, desc="Eval steering", position=0, leave=True)
-            for row in pbar:
-                pbar.set_description(f"Eval: {value}")
-                rec = {"value": value}
-
-                if use_ab:
-                    ab_base = self._score_ab_next_token(row)
-                    ab_steer = self._score_ab_next_token(row, hook_infos)
-                    rec.update({
-                        "ab_prob_positive_base": ab_base["prob_positive"],
-                        "ab_prob_negative_base": ab_base["prob_negative"],
-                        "ab_margin_base": ab_base["positive_margin"],
-                        "ab_correct_base": ab_base["is_correct"],
-                        "ab_prob_positive_steer": ab_steer["prob_positive"],
-                        "ab_prob_negative_steer": ab_steer["prob_negative"],
-                        "ab_margin_steer": ab_steer["positive_margin"],
-                        "ab_correct_steer": ab_steer["is_correct"],
-                    })
-                else:
-                    prompt = schwartz_eval.format_qa_eval_prompt(
-                        row["question"],
-                        tokenizer=self.tokenizer,
-                        model_name=self.config.model_name,
-                    )
-                    pos = row["positive_answer"]
-                    neg = row["negative_answer"]
-                    rec.update({
-                        "lp_pos_base": self._compute_logprob(prompt, pos),
-                        "lp_neg_base": self._compute_logprob(prompt, neg),
-                        "lp_pos_steer": self._compute_logprob(prompt, pos, hook_infos),
-                        "lp_neg_steer": self._compute_logprob(prompt, neg, hook_infos),
-                    })
-
-                records.append(rec)
-
-        if not records:
-            self._log("  WARNING: no evaluation records collected!")
-            return {}
-
-        eval_payload = schwartz_eval.build_eval_payload(
-            eval_metric,
-            records,
-            self.values,
-            extra_fields={
-                "alpha": alpha,
-                "layer": layer if isinstance(layer, int) else layers,
-            },
+        return schwartz_eval.evaluate_steering(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            val_rows=self.val_rows,
+            vectors=vectors,
+            values=self.values,
+            layer=layer,
+            alpha=self.config.alpha,
+            eval_metric=self.config.eval_metric,
+            model_name=self.config.model_name,
+            device=self.config.device,
+            output_dir=self.config.output_dir,
+            schwartz_value_order=SCHWARTZ_CIRCUMPLEX_ORDER,
+            random_seed=self.config.random_seed,
+            n_eval_samples=self.config.n_eval_samples,
+            get_rows_for_value=data_utils.get_rows_for_value,
+            log=self._log,
         )
-
-        per_value = eval_payload["per_value"]
-        overall = eval_payload["overall"]
-        delta_key = (
-            "mean_delta_positive_margin"
-            if use_ab
-            else "mean_delta_logprob"
-        )
-
-        self._log("")
-        self._log(
-            f"  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} "
-            f"{'Δ Acc':>7} {'Δ':>9}"
-        )
-        self._log("  " + "-" * 75)
-        for value in self.values:
-            if value not in per_value:
-                continue
-            m = per_value[value]
-            self._log(
-                f"  {value:<35} {m['accuracy_baseline']:>9.1%} "
-                f"{m['accuracy_steered']:>10.1%} "
-                f"{m['delta_accuracy']:>+7.1%} "
-                f"{m.get(delta_key, 0):>+9.4f}"
-            )
-        self._log("  " + "-" * 75)
-        o = overall
-        self._log(
-            f"  {'OVERALL':<35} {o['accuracy_baseline']:>9.1%} "
-            f"{o['accuracy_steered']:>10.1%} "
-            f"{o['delta_accuracy']:>+7.1%} "
-            f"{o.get(delta_key, 0):>+9.4f}\n"
-        )
-
-        eval_path = os.path.join(
-            self.config.output_dir, "steering_eval_metrics.json"
-        )
-        with open(eval_path, "w") as f:
-            json.dump(eval_payload, f, indent=2)
-        self._log(f"  Saved evaluation metrics → {eval_path}")
-
-        self._plot_eval_accuracy(per_value, overall, eval_metric)
-
-        return eval_payload
-
-    def _plot_eval_accuracy(
-        self,
-        per_value: Dict[str, dict],
-        overall: dict,
-        eval_metric: Optional[str] = None,
-    ):
-        """Grouped bar chart comparing baseline vs steered accuracy."""
-        eval_metric = eval_metric or self.config.eval_metric
-        labels = [v for v in self.values if v in per_value]
-        if not labels:
-            return
-
-        base_accs = [per_value[v]["accuracy_baseline"] for v in labels]
-        steer_accs = [per_value[v]["accuracy_steered"] for v in labels]
-
-        x = np.arange(len(labels))
-        width = 0.35
-
-        fig, ax = plt.subplots(figsize=(max(12, len(labels) * 0.9), 6))
-        bars1 = ax.bar(x - width / 2, base_accs, width, label="Baseline",
-                       color="#90CAF9", edgecolor="#1565C0")
-        bars2 = ax.bar(x + width / 2, steer_accs, width, label="Steered",
-                       color="#A5D6A7", edgecolor="#2E7D32")
-
-        ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.5,
-                   label="Chance (50%)")
-        ax.set_ylabel("Accuracy (positive preferred)")
-        ax.set_title(
-            f"Steering Evaluation — {schwartz_eval.eval_metric_label(eval_metric)}\n"
-            f"(α={self.config.alpha}, overall: "
-            f"{overall['accuracy_baseline']:.1%} → {overall['accuracy_steered']:.1%})"
-        )
-        ax.set_xticks(x)
-        short_labels = [v.split(":")[-1].strip() if ":" in v else v
-                        for v in labels]
-        ax.set_xticklabels(short_labels, rotation=45, ha="right", fontsize=9)
-        ax.set_ylim(0, 1.05)
-        ax.legend(loc="upper left")
-        ax.grid(axis="y", alpha=0.3)
-
-        plt.tight_layout()
-        out_path = os.path.join(
-            self.config.output_dir, "steering_eval_accuracy.png"
-        )
-        plt.savefig(out_path, dpi=300)
-        plt.close()
-        self._log(f"  Saved accuracy plot   → {out_path}")
 
     # ─── Geometry Analysis ─────────────────────────────────────────────
 
