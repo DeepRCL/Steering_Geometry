@@ -143,18 +143,27 @@ def make_topk_steer_hook(
     use_delta_correction: bool = True,
 ):
     """
-    Post-TopK steering hook (legacy, use make_pre_topk_steer_hook instead).
+    SAS-faithful post-TopK steering hook (used when use_pre_topk_personas=False).
 
-    Adds the persona direction to the post-TopK sparse z AFTER TopK selection.
-    This bypasses the TopK gate, so the value signal cannot change which features
-    are selected — it only modulates already-selected features.
-    Use this only when config.use_pre_topk_personas=False.
+    Implements the full SAS inference equation:
+        ã = â(σ(f(a) + λ · v)) + Δ
+
+    Step by step:
+        z     = f(a) = encode(a)              ← sparse post-TopK encoding, k active
+        Δ     = a − â(z)                      ← reconstruction residual (if enabled)
+        s     = z + λ · v                     ← inject in sparse space (SAS Step C)
+        σ(s)  = re-apply TopK to s            ← SAS Step D: keep exactly k features
+        recon = decode(σ(s))                  ← SAS Step E
+        ã     = recon + Δ                     ← SAS Step F
+
+    Re-applying TopK after the addition (Step D) is the critical SAS requirement:
+    without it the decoder receives inputs with an arbitrary number of non-zero
+    entries, far outside the distribution it was trained on.
 
     Args:
         use_delta_correction: When True (default), compute Δ = act − decode(encode(act))
             from the unsteered pass and add it to the steered reconstruction.
-            This cancels SAE reconstruction error that would otherwise be injected
-            into the residual stream on every forward pass.
+            This cancels SAE reconstruction error injected on every forward pass.
     """
     def hook(module, inp, output):
         hidden = output[0] if isinstance(output, tuple) else output
@@ -162,22 +171,28 @@ def make_topk_steer_hook(
         dtype = hidden.dtype
         flat = hidden.reshape(-1, d_in).to(torch.float32)     # (batch*seq, d_in)
 
-        # Encode → sparse space (TopK, k=50)
+        # SAS Step B — encode (post-TopK sparse, exactly k non-zeros)
         z = sae.encode(flat)                                   # (batch*seq, d_sae)
 
-        # Δ correction: unsteered reconstruction error (z is already the
-        # unsteered encoding, so reuse it directly)
+        # SAS Step B — Δ correction (reuse z to avoid a second encode call)
         if use_delta_correction:
             act_recon = sae.decode(z)                          # (batch*seq, d_in)
             delta = flat - act_recon                           # (batch*seq, d_in)
 
-        # Add persona direction in sparse space
+        # SAS Step C — add persona direction in sparse space
         pv = persona_vec.to(device=z.device, dtype=z.dtype)
-        z_steered = z + alpha * pv
-        # Decode → back to dense residual space
+        z_steered_raw = z + alpha * pv                         # (batch*seq, d_sae)
+
+        # SAS Step D — re-apply TopK / σ to restore k-sparse constraint
+        # Without this the decoder receives out-of-distribution dense inputs.
+        topk_vals, topk_idx = z_steered_raw.topk(sae.k, dim=-1)
+        z_steered = torch.zeros_like(z_steered_raw)
+        z_steered.scatter_(-1, topk_idx, topk_vals)            # (batch*seq, d_sae)
+
+        # SAS Step E — decode back to dense residual space
         recon = sae.decode(z_steered)                          # (batch*seq, d_in)
 
-        # Add back the reconstruction error to preserve unmodelled information
+        # SAS Step F — add back reconstruction residual
         if use_delta_correction:
             recon = recon + delta
 
