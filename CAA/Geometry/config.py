@@ -87,6 +87,12 @@ class PipelineConfig:
     spherical_geometry_alpha: Optional[float] = None
     spherical_geometry_source: str = "neg"
     spherical_geometry_vector: str = "displacement"
+    opt_lr: float = 0.3
+    opt_max_iters: int = 10
+    opt_starting_norm: float = 1.0
+    opt_max_norm: Optional[float] = None
+    opt_n_training_samples: Optional[int] = None
+    opt_steer_position: str = "all"
     geometry_transform: str = "none"
 
     # Data split

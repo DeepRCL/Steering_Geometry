@@ -31,3 +31,6 @@ llm-steering-opt/steering_results
 SAE/QwenScopeCAA/outputs/
 SphericalSteer/
 cobras/
+BiPO/
+SAE/QwenScopeCAA/outputs*/
+experiments/cross_value_transfer/outputs/

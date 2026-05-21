@@ -8,6 +8,7 @@ from .config import PipelineConfig, SCHWARTZ_CIRCUMPLEX_ORDER, safe_name
 from .model_loader import load_model
 from .data_loader import DataLoader
 from .steering.caa import CAASteeringMethod
+from .steering.optimized import OptimizedSteeringMethod
 from .steering.spherical import SphericalSteeringMethod
 from .layer_selection import select_layer
 from .evaluate import evaluate_steering
@@ -17,6 +18,16 @@ def get_steering_method(name: str, config: PipelineConfig):
     normalized_name = name.lower()
     if normalized_name == "caa":
         return CAASteeringMethod()
+    if normalized_name in {"opt", "optimized", "bipo"}:
+        return OptimizedSteeringMethod(
+            lr=config.opt_lr,
+            max_iters=config.opt_max_iters,
+            starting_norm=config.opt_starting_norm,
+            max_norm=config.opt_max_norm,
+            n_training_samples=config.opt_n_training_samples,
+            seed=config.seed,
+            steer_position=config.opt_steer_position,
+        )
     if normalized_name in {"spherical", "sphericalsteer", "spherical_steer"}:
         return SphericalSteeringMethod(
             kappa=config.spherical_kappa,
@@ -149,6 +160,11 @@ def run_pipeline(config: PipelineConfig, modules_to_run: list):
                 
             if config.save_activations:
                 steering_method.save_activations(act_dir, val)
+
+        training_info = getattr(steering_method, "training_info", None)
+        if training_info:
+            with open(os.path.join(config.model_output_dir, "optimization_training_info.json"), "w") as f:
+                json.dump(training_info, f, indent=2)
     else:
         # Load vectors from disk
         print("Loading precomputed steering vectors...")
@@ -279,13 +295,19 @@ if __name__ == "__main__":
     parser.add_argument("--layer_start_frac", type=float, default=0.4, help="Start layer search/extraction at this fraction of depth")
     parser.add_argument("--layer_end_frac", type=float, default=1.0, help="Stop layer search/extraction before this fraction of depth")
     parser.add_argument("--alpha", type=str, default="0.5,1.0,2.0,4.0", help="Comma-separated alphas")
-    parser.add_argument("--steering_method", type=str, default="caa", help="caa or spherical")
+    parser.add_argument("--steering_method", type=str, default="caa", help="caa, spherical, opt, or bipo")
     parser.add_argument("--spherical_kappa", type=float, default=20.0, help="vMF concentration for spherical steering")
     parser.add_argument("--spherical_beta", type=float, default=-0.15, help="Trigger threshold p_H - p_T > beta")
     parser.add_argument("--spherical_steer_position", type=str, default="last", help="last or all")
     parser.add_argument("--spherical_geometry_alpha", type=float, default=None, help="Alpha used for displacement geometry; default uses best evaluated alpha")
     parser.add_argument("--spherical_geometry_source", type=str, default="neg", help="neg, pos, or all activations for displacement geometry")
     parser.add_argument("--spherical_geometry_vector", type=str, default="displacement", help="displacement or prototype")
+    parser.add_argument("--opt_lr", type=float, default=0.3, help="Learning rate for opt/bipo vector optimization")
+    parser.add_argument("--opt_max_iters", type=int, default=10, help="Maximum optimization iterations per value/layer")
+    parser.add_argument("--opt_starting_norm", type=float, default=1.0, help="Initial optimized vector norm")
+    parser.add_argument("--opt_max_norm", type=float, default=None, help="Optional max norm for optimized vectors")
+    parser.add_argument("--opt_n_training_samples", type=int, default=None, help="Optional train samples per value for opt/bipo")
+    parser.add_argument("--opt_steer_position", type=str, default="all", help="all or last token positions for opt/bipo steering")
     parser.add_argument("--geometry_transform", type=str, default="none", help="none, centered, or centered_renorm")
     
     args = parser.parse_args()
@@ -307,6 +329,12 @@ if __name__ == "__main__":
         spherical_geometry_alpha=args.spherical_geometry_alpha,
         spherical_geometry_source=args.spherical_geometry_source,
         spherical_geometry_vector=args.spherical_geometry_vector,
+        opt_lr=args.opt_lr,
+        opt_max_iters=args.opt_max_iters,
+        opt_starting_norm=args.opt_starting_norm,
+        opt_max_norm=args.opt_max_norm,
+        opt_n_training_samples=args.opt_n_training_samples,
+        opt_steer_position=args.opt_steer_position,
         geometry_transform=args.geometry_transform,
     )
     
