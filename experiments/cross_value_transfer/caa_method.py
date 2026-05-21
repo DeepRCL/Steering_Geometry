@@ -101,6 +101,22 @@ class CAAMethod(SteeringMethod):
                 f"CAAMethod: run_dir does not exist: {self._run_dir}"
             )
 
+        # Validate that this looks like the right directory level
+        vectors_dir = self._run_dir / "vectors"
+        if not vectors_dir.exists():
+            # Try to give a helpful suggestion
+            parent = self._run_dir.parent
+            siblings = [d.name for d in parent.iterdir() if d.is_dir() and (d / "vectors").exists()]
+            hint = (
+                f"\n  Directories in {parent} that contain vectors/: {siblings}"
+                if siblings else ""
+            )
+            raise FileNotFoundError(
+                f"CAAMethod: no 'vectors/' subdirectory found in:\n  {self._run_dir}\n"
+                f"Pass the model-specific directory that directly contains vectors/ "
+                f"(e.g. CAA/Geometry/outputs/<run>/Qwen__Qwen3.5-9B-Base).{hint}"
+            )
+
     # ── identity ─────────────────────────────────────────────────────────────
 
     @property
@@ -116,6 +132,15 @@ class CAAMethod(SteeringMethod):
         if selected_layer_path.exists():
             with open(selected_layer_path, "r") as f:
                 return int(json.load(f)["selected_layer"])
+
+        # Step 3: config.json → layer_override field (set by PipelineConfig.layer_override)
+        config_path = self._run_dir / "config.json"
+        if config_path.exists():
+            with open(config_path, "r") as f:
+                data = json.load(f)
+            layer_override = data.get("layer_override")
+            if layer_override is not None:
+                return int(layer_override)
 
         # Give a helpful error showing what .pt files exist for the first value
         first_value = CIRCUMPLEX_ORDER[0]

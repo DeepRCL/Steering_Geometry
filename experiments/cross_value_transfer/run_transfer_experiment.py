@@ -78,10 +78,10 @@ def load_eval_instances(
     with open(config.eval_dataset_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         for row in reader:
-            value = row.get("value", "").strip()
+            value = (row.get("value") or "").strip()
             if value not in CIRCUMPLEX_ORDER:
                 continue
-            if row.get("caa_suitable", "").strip() != "True":
+            if (row.get("caa_suitable") or "").strip() != "True":
                 continue
             grouped[value].append(row)
 
@@ -95,11 +95,11 @@ def load_eval_instances(
         for row in rows:
             instances.append(
                 EvalInstance(
-                    sample_id=row.get("argument_id", row.get("id", "")),
+                    sample_id=row.get("argument_id") or row.get("id") or "",
                     value=value,
-                    question=row["question"],
-                    positive_answer=row["positive_answer"],
-                    negative_answer=row["negative_answer"],
+                    question=row.get("question") or "",
+                    positive_answer=row.get("positive_answer") or "",
+                    negative_answer=row.get("negative_answer") or "",
                     pos_is_a=rng.choice([True, False]),
                 )
             )
