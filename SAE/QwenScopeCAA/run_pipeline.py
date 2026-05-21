@@ -11,14 +11,17 @@ Four modules, run in order or independently:
              Writes sae_finetuned_layer{n}.pt.
 
   extract    Compute sparse CAA persona vectors (one per Schwartz value) using
-             the (optionally fine-tuned) SAE.
-             Requires GPU + Qwen.  Writes sparse_vectors/.
+             the (optionally fine-tuned) SAE on the CAA-compatible base split.
+             Requires GPU + Qwen.  Writes sparse_vectors_caa_base/ and
+             steering_activations/.
 
   evaluate   Steer the model via the sparse SAE space and measure A/B logit
              accuracy.  Requires GPU + Qwen.  Writes evaluation/.
 
   geometry   Compute Spearman ρ and produce all visualisations (UMAP, t-SNE,
              MDS circumplex, heatmaps) for both raw and mean-centred vectors.
+             Defaults to dense steering displacement vectors
+             (steered_activation - original_activation).
              CPU-only.  Writes geometry_raw/ and geometry_centered/.
 
 ──────────────────────────────────────────────────────────────────────────────
@@ -207,6 +210,30 @@ def _parse_args() -> argparse.Namespace:
         help="Comma-separated alpha values for steering evaluation",
     )
 
+    # ── Geometry ─────────────────────────────────────────────────────────────
+    p.add_argument(
+        "--geometry_vector",
+        choices=["displacement", "persona"],
+        default="displacement",
+        help=(
+            "Vector used for geometry. 'displacement' analyzes the actual "
+            "steered_activation - original_activation change; 'persona' uses "
+            "the SAE persona direction directly."
+        ),
+    )
+    p.add_argument(
+        "--geometry_alpha",
+        type=float,
+        default=None,
+        help="Alpha used for displacement geometry. Defaults to best evaluated alpha.",
+    )
+    p.add_argument(
+        "--geometry_source",
+        choices=["neg", "pos", "all"],
+        default="neg",
+        help="Training activations used for displacement geometry (default: neg).",
+    )
+
     # ── Schwartz relations ────────────────────────────────────────────────────
     p.add_argument("--relations_path", default="schwartz_relations.json")
 
@@ -270,6 +297,9 @@ def main() -> None:
         finetune_epochs=args.finetune_epochs,
         finetune_batch_size=args.finetune_batch_size,
         alpha_values=[float(a) for a in args.alpha.split(",")],
+        geometry_vector=args.geometry_vector,
+        geometry_alpha=args.geometry_alpha,
+        geometry_source=args.geometry_source,
         relations_path=args.relations_path,
         output_dir=args.output_dir,
     )

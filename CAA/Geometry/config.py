@@ -81,6 +81,13 @@ class PipelineConfig:
     # Steering
     alpha_values: List[float] = field(default_factory=lambda: [0.5, 1.0, 2.0, 4.0])
     steering_method: str = "caa"
+    spherical_kappa: float = 20.0
+    spherical_beta: float = -0.15
+    spherical_steer_position: str = "last"
+    spherical_geometry_alpha: Optional[float] = None
+    spherical_geometry_source: str = "neg"
+    spherical_geometry_vector: str = "displacement"
+    geometry_transform: str = "none"
 
     # Data split
     eval_split: float = 0.1

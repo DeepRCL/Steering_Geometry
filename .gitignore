@@ -29,4 +29,5 @@ SAE/sae_models/
 SAE/SparseCAA/outputs/
 llm-steering-opt/steering_results
 SAE/QwenScopeCAA/outputs/
-/
+SphericalSteer/
+cobras/

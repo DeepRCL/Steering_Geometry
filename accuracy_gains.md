@@ -28,8 +28,11 @@ The mean is macro-averaged over the 20 Schwartz values. The best alpha is select
 | Qwen3.5-9B Base | OPT | -- | -- | -- | -- | -- |
 | Qwen3.5-9B Base | CAA | 41.40% | 53.13% | +11.74 pp | +28.36% | 40 |
 | Qwen3.5-9B Base | SparseCAA | 44.34% | 51.20% | +6.86 pp | +15.48% | 4 |
+| Qwen3.5-9B Base | QwenScopeCAA SparseCAA (k=1024) | 48.14% | 56.70% | +8.57 pp | +17.79% | 2 |
 | Qwen3.5-9B Instruct | OPT | -- | -- | -- | -- | -- |
 | Qwen3.5-9B Instruct | CAA | 49.25% | 49.25% | +0.00 pp | +0.00% | 0.25 |
 | Qwen3.5-9B Instruct | SparseCAA | 51.20% | 51.20% | +0.00 pp | +0.00% | 0.5 |
 
 Note: OPT accuracy artifacts were not present locally. The OPT pipeline should produce `steering_eval_metrics.json` under `llm-steering-opt/steering_results/...`; those values can be filled in later.
+
+Note: The paper-wired SparseCAA row uses `SAE/SparseCAA/outputs/Qwen__Qwen3.5-9B-Base` with `SAE/sae_base_best.pt`. The QwenScopeCAA row uses `SAE/QwenScopeCAA/outputs/Qwen__Qwen3.5-9B-Base_layer16_k1024` with the pretrained `Qwen/SAE-Res-Qwen3.5-9B-Base-W64K-L0_50` SAE, so it should be treated as a separate sparse variant.

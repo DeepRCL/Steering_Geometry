@@ -182,6 +182,15 @@ class QwenScopePipelineConfig:
         default_factory=lambda: [0.5, 1.0, 2.0, 4.0]
     )
 
+    # ── Geometry ─────────────────────────────────────────────────────────────
+    # "displacement" analyzes the actual dense residual-stream change induced by
+    # the SAE steering hook: steered_activation - original_activation.
+    # "persona" preserves the previous behavior and analyzes the SAE persona
+    # direction directly.
+    geometry_vector: str = "displacement"
+    geometry_alpha: Optional[float] = None
+    geometry_source: str = "neg"  # neg, pos, or all training activations
+
     # ── Schwartz relations ───────────────────────────────────────────────────
     relations_path: str = "schwartz_relations.json"
 
@@ -221,7 +230,23 @@ class QwenScopePipelineConfig:
 
     @property
     def sparse_vectors_dir(self) -> str:
-        return self.subdir("sparse_vectors")
+        return self.subdir("sparse_vectors_caa_base")
+
+    @property
+    def steering_split_manifest_path(self) -> str:
+        return os.path.join(self.subdir("splits"), "caa_base_split.json")
+
+    @property
+    def steering_activations_dir(self) -> str:
+        return self.subdir("steering_activations")
+
+    @property
+    def geometry_vectors_dir(self) -> str:
+        return self.subdir("geometry_vectors")
+
+    @property
+    def evaluation_dir(self) -> str:
+        return self.subdir("evaluation_caa_base")
 
     def save(self) -> None:
         os.makedirs(self.run_dir, exist_ok=True)

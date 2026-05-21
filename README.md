@@ -1,5 +1,127 @@
 # Steering Geometry — Dataset Construction
 
+## Current Steering Baseline Runs
+
+These commands use `Qwen/Qwen3.5-9B-Base`, keep the same base dataset split for
+CAA, SphericalSteer, and QwenScopeCAA steering/evaluation, and write to new
+output folders so existing results are not overwritten.
+
+Evaluation now reports both metrics:
+
+- `ab_next_token`: multiple-choice prompt, compare next-token `P(A)` vs `P(B)`.
+- `full_answer_mean_logprob`: OPT-style scoring, compare mean log-probability
+  of the full positive answer vs the full negative answer.
+
+Geometry is unchanged for linear CAA. For SphericalSteer and QwenScopeCAA,
+geometry uses the empirical intervention vector:
+
+```text
+value_vector = mean(steered_activation - original_activation)
+```
+
+### CAA
+
+Existing best result:
+
+`CAA/Geometry/outputs/qwen3_5_9b_base_v2_centered_renorm/Qwen__Qwen3.5-9B-Base`
+
+Rerun into a new folder with both accuracy metrics:
+
+```bash
+python -m CAA.Geometry.run_pipeline \
+  --model_name Qwen/Qwen3.5-9B-Base \
+  --dataset_path CAA/value_data/final_dataset_200.csv \
+  --relations_path CAA/value_data/schwartz_relations-new.json \
+  --output_dir CAA/Geometry/outputs/qwen3_5_9b_base_v2_dual_metrics \
+  --steering_method caa \
+  --alpha 0.25,0.5,1.0,2.0,4.0 \
+  --geometry_transform centered_renorm \
+  --modules all
+```
+
+Outputs:
+
+- A/B metric: `.../evaluation/evaluation_summary.json`
+- Full-answer logprob metric: `.../evaluation/evaluation_summary_full_logprob.json`
+- Geometry: `.../geometry/`
+
+### SphericalSteer
+
+Existing best evaluation:
+
+`SphericalSteer/focused_tuning/k2_bneg0p6/Qwen__Qwen3.5-9B-Base/evaluation/evaluation_summary.json`
+
+Rerun into a new folder with the current best hyperparameters:
+
+```bash
+python -m CAA.Geometry.run_pipeline \
+  --model_name Qwen/Qwen3.5-9B-Base \
+  --dataset_path CAA/value_data/final_dataset_200.csv \
+  --relations_path schwartz_relations.json \
+  --output_dir SphericalSteer/focused_tuning/k2_bneg0p6_dual_metrics \
+  --steering_method spherical \
+  --spherical_kappa 2.0 \
+  --spherical_beta -0.6 \
+  --spherical_steer_position last \
+  --spherical_geometry_alpha 0.9 \
+  --spherical_geometry_source neg \
+  --spherical_geometry_vector displacement \
+  --geometry_transform centered_renorm \
+  --layer_override 16 \
+  --alpha 0.9 \
+  --modules all
+```
+
+Outputs:
+
+- A/B metric: `.../evaluation/evaluation_summary.json`
+- Full-answer logprob metric: `.../evaluation/evaluation_summary_full_logprob.json`
+- Displacement geometry: `.../geometry_vectors/` and `.../geometry/`
+
+### QwenScopeCAA
+
+QwenScopeCAA still uses the larger base+Touche dataset for SAE fine-tuning.
+After fine-tuning, extraction, steering evaluation, and geometry use the saved
+CAA-compatible base-only split:
+
+`.../splits/caa_base_split.json`
+
+Rerun aligned extraction/evaluation/geometry into a new root output folder:
+
+```bash
+python -m SAE.QwenScopeCAA.run_pipeline \
+  --layer 16 \
+  --k 50 \
+  --modules extract,evaluate,geometry \
+  --alpha 0.5,1.0,2.0,4.0 \
+  --geometry_vector displacement \
+  --geometry_source neg \
+  --output_dir SAE/QwenScopeCAA/outputs_dual_metrics
+```
+
+If the fine-tuned SAE does not exist in that new output folder, run the full
+pipeline once:
+
+```bash
+python -m SAE.QwenScopeCAA.run_pipeline \
+  --layer 16 \
+  --k 50 \
+  --modules all \
+  --alpha 0.5,1.0,2.0,4.0 \
+  --geometry_vector displacement \
+  --geometry_source neg \
+  --output_dir SAE/QwenScopeCAA/outputs_dual_metrics
+```
+
+Outputs:
+
+- A/B metric: `.../evaluation_caa_base/evaluation_summary.json`
+- Full-answer logprob metric: `.../evaluation_caa_base/evaluation_summary_full_logprob.json`
+- Saved split: `.../splits/caa_base_split.json`
+- Displacement geometry: `.../geometry_vectors/`, `.../geometry_raw/`, and `.../geometry_centered/`
+
+---
+
 Builds augmented datasets for value-alignment research. Currently supports three pipelines:
 
 1. **ValueBench** — generates positive/negative answers for the ValueBench dataset using a local Qwen model, then maps raw value labels to canonical Schwartz categories via Gemini.

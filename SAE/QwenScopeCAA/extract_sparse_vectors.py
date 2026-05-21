@@ -42,9 +42,8 @@ from .config import QwenScopePipelineConfig, SCHWARTZ_CIRCUMPLEX_ORDER, safe_nam
 from .data_loader import (
     ContrastivePair,
     format_prompts,
-    load_combined,
+    load_steering_split,
     print_dataset_summary,
-    split_dataset,
 )
 from .topk_sae_model import TopKSparseAutoencoder, get_or_download_sae
 
@@ -57,12 +56,19 @@ def _vec_path(config: QwenScopePipelineConfig, val: str) -> str:
 
 
 def _all_cached(config: QwenScopePipelineConfig) -> bool:
-    return all(os.path.exists(_vec_path(config, v)) for v in SCHWARTZ_CIRCUMPLEX_ORDER)
+    return all(
+        os.path.exists(_vec_path(config, v)) and os.path.exists(_act_path(config, v))
+        for v in SCHWARTZ_CIRCUMPLEX_ORDER
+    )
 
 
 def _load_cached(config: QwenScopePipelineConfig) -> Dict[str, torch.Tensor]:
     return {v: torch.load(_vec_path(config, v), map_location="cpu")
             for v in SCHWARTZ_CIRCUMPLEX_ORDER}
+
+
+def _act_path(config: QwenScopePipelineConfig, val: str) -> str:
+    return os.path.join(config.steering_activations_dir, f"{safe_name(val)}.pt")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -131,12 +137,19 @@ def extract_sparse_vectors(
     """
     os.makedirs(config.sparse_vectors_dir, exist_ok=True)
 
+    # SAE fine-tuning may use the larger base+Touche dataset, but persona-vector
+    # extraction is locked to the same base-only split as CAA/SphericalSteer.
+    train_data, eval_data = load_steering_split(config)
+    print_dataset_summary(train_data, eval_data)
+
     if _all_cached(config):
         print("All sparse persona vectors cached — loading from disk.")
         return _load_cached(config)
 
-    missing = [v for v in SCHWARTZ_CIRCUMPLEX_ORDER
-               if not os.path.exists(_vec_path(config, v))]
+    missing = [
+        v for v in SCHWARTZ_CIRCUMPLEX_ORDER
+        if not os.path.exists(_vec_path(config, v)) or not os.path.exists(_act_path(config, v))
+    ]
     print(f"{len(missing)}/{len(SCHWARTZ_CIRCUMPLEX_ORDER)} values need extraction.")
 
     # ── Load SAE (CPU) ────────────────────────────────────────────────────────
@@ -166,11 +179,6 @@ def extract_sparse_vectors(
     name_lower = config.model_name.lower()
     is_instruct = "base" not in name_lower and "pt" not in name_lower
 
-    # ── Load data ─────────────────────────────────────────────────────────────
-    df = load_combined(config)
-    train_data, eval_data = split_dataset(df, config)
-    print_dataset_summary(train_data, eval_data)
-
     # ── Hook: last-token residual-stream activation ───────────────────────────
     _current: Dict[str, torch.Tensor] = {}
 
@@ -189,7 +197,7 @@ def extract_sparse_vectors(
     try:
         for val in SCHWARTZ_CIRCUMPLEX_ORDER:
             cache_p = _vec_path(config, val)
-            if os.path.exists(cache_p):
+            if os.path.exists(cache_p) and os.path.exists(_act_path(config, val)):
                 vectors[val] = torch.load(cache_p, map_location="cpu")
                 print(f"  [cache] {val}")
                 continue
@@ -205,6 +213,8 @@ def extract_sparse_vectors(
 
             pos_z: List[torch.Tensor] = []
             neg_z: List[torch.Tensor] = []
+            pos_acts: List[torch.Tensor] = []
+            neg_acts: List[torch.Tensor] = []
 
             # Choose pre-TopK (dense) or post-TopK (sparse) representation.
             # pre_encode is strongly preferred: post-TopK vectors have ~99.9%
@@ -218,14 +228,18 @@ def extract_sparse_vectors(
                 # Positive prompt
                 _current.clear()
                 model(torch.tensor([pos_tokens]).to(device))
-                z_pos = encode_fn(_current["act"])    # (d_sae,)
+                act_pos = _current["act"]
+                z_pos = encode_fn(act_pos)    # (d_sae,)
                 pos_z.append(z_pos.detach())
+                pos_acts.append(act_pos.detach())
 
                 # Negative prompt
                 _current.clear()
                 model(torch.tensor([neg_tokens]).to(device))
-                z_neg = encode_fn(_current["act"])    # (d_sae,)
+                act_neg = _current["act"]
+                z_neg = encode_fn(act_neg)    # (d_sae,)
                 neg_z.append(z_neg.detach())
+                neg_acts.append(act_neg.detach())
 
             # Step 2 — τ frequency-masked non-zero mean
             v_pos = _tau_mean(pos_z, config.tau)    # (d_sae,)
@@ -256,6 +270,18 @@ def extract_sparse_vectors(
             vec = v_pos - v_neg                     # (d_sae,) persona vector
 
             torch.save(vec, cache_p)
+            os.makedirs(config.steering_activations_dir, exist_ok=True)
+            torch.save(
+                {
+                    "value": val,
+                    "source": "caa_compatible_base_train_split",
+                    "layer": config.layer,
+                    "sample_ids": [p.sample_id for p in pairs],
+                    "pos": torch.stack(pos_acts).cpu(),
+                    "neg": torch.stack(neg_acts).cpu(),
+                },
+                _act_path(config, val),
+            )
             vectors[val] = vec
             metadata[val] = {
                 "n_train": len(pairs),

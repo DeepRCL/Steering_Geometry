@@ -43,9 +43,9 @@ finetune  →  extract  →  evaluate  →  geometry
 | Module | Description | GPU required? |
 |---|---|---|
 | `finetune` | Adapt the pre-trained Qwen-Scope SAE to value-specific residual activations. Collects all-token activations into an HDF5 cache, then fine-tunes with MSE loss. | Yes |
-| `extract` | Compute per-value sparse CAA persona vectors using τ-masked non-zero mean and optional common-feature removal. | Yes |
-| `evaluate` | Steer the model via the sparse SAE space (with optional Δ reconstruction correction) and measure A/B logit accuracy across alpha values. | Yes |
-| `geometry` | Spearman ρ vs. Schwartz theory, UMAP, t-SNE, MDS circumplex, similarity heatmaps. | No (CPU) |
+| `extract` | Compute per-value sparse CAA persona vectors using the CAA-compatible base-only steering split. Saves last-token residual activations for displacement geometry. | Yes |
+| `evaluate` | Steer the model via the sparse SAE space and report both A/B next-token accuracy and full-answer mean-logprob accuracy across alpha values. | Yes |
+| `geometry` | Spearman ρ vs. Schwartz theory, UMAP, t-SNE, MDS circumplex, similarity heatmaps. Defaults to dense displacement vectors, `mean(steered_activation - original_activation)`. | No (CPU/GPU optional) |
 
 ---
 
@@ -120,7 +120,7 @@ Without correction, the SAE reconstruction error is injected into the residual s
 Run from the **project root** (`Steering_Geometry/`):
 
 ```bash
-# Full pipeline — fine-tune SAE, then extract / evaluate / geometry:
+# Full pipeline — fine-tune SAE on base+Touche, then extract / evaluate / geometry on the CAA base split:
 python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --modules all
 
 # Skip fine-tuning — use the pre-trained Qwen-Scope SAE directly:
@@ -129,9 +129,18 @@ python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --skip_finetune
 # Different layer (any of 0–31), no fine-tuning:
 python -m SAE.QwenScopeCAA.run_pipeline --layer 24 --skip_finetune
 
-# GPU steps now, geometry later on CPU:
+# GPU steps now, geometry later:
 python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --modules finetune,extract,evaluate
 python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --modules geometry
+
+# Aligned comparison run with separate output root:
+python -m SAE.QwenScopeCAA.run_pipeline \
+    --layer 16 --k 50 \
+    --modules extract,evaluate,geometry \
+    --alpha 0.5,1.0,2.0,4.0 \
+    --geometry_vector displacement \
+    --geometry_source neg \
+    --output_dir SAE/QwenScopeCAA/outputs_dual_metrics
 
 # Reproduce original behaviour (no tau filtering, no common removal, no delta correction):
 python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --skip_finetune \
@@ -149,6 +158,9 @@ python -m SAE.QwenScopeCAA.run_pipeline --layer 16 --skip_finetune \
 | `--model_name` | `Qwen/Qwen3.5-9B-Base` | HuggingFace model ID |
 | `--touche_samples_per_value` | `200` | Max Touche rows added per value |
 | `--alpha` | `0.5,1.0,2.0,4.0` | Steering strengths for evaluation |
+| `--geometry_vector` | `displacement` | `displacement` uses dense residual change; `persona` uses the SAE feature-space vector |
+| `--geometry_source` | `neg` | Training activations used for displacement geometry: `neg`, `pos`, or `all` |
+| `--geometry_alpha` | best eval alpha | Alpha used for displacement geometry |
 | `--tau` | `0.7` | Frequency threshold τ for feature inclusion in persona mean |
 | `--no_remove_common_features` | off | Disable zeroing of features active in both v_pos and v_neg |
 | `--no_delta_correction` | off | Disable SAE reconstruction-error correction in the steering hook |
@@ -165,16 +177,28 @@ pipeline_config.json          # Full run configuration (includes tau, remove_com
                               #   use_delta_correction)
 activation_cache.h5           # HDF5 activation cache (finetune module)
 sae_finetuned_layer16.pt      # Fine-tuned SAE checkpoint (Qwen-Scope format)
-sparse_vectors/
+sparse_vectors_caa_base/
   *.pt                        # One (65536,) persona vector per Schwartz value
   value_metadata.json         # Per-value stats: n_train, norm, feature counts,
                               #   tau, n_pos/neg_features_above_tau,
                               #   n_common_features_removed
-evaluation/
+splits/
+  caa_base_split.json          # Saved CAA-compatible train/eval split
+steering_activations/
+  *.pt                         # Last-token residual activations for geometry
+evaluation_caa_base/
   eval_results.json
+  eval_results_full_logprob.json
+  evaluation_summary.json
+  evaluation_summary_full_logprob.json
   baseline_vs_steered_accuracy.png
   accuracy_gain_vs_baseline.png
+  full_logprob_baseline_vs_steered_accuracy.png
+  full_logprob_accuracy_gain_vs_baseline.png
   accuracy_gain_heatmap.png
+geometry_vectors/
+  *.pt                         # Dense mean displacement vectors
+  manifest.json
 geometry_raw/
   spearman_report.json
   geometry_metrics.json
@@ -199,11 +223,11 @@ SAE/QwenScopeCAA/
 ├── config.py                   # QwenScopePipelineConfig dataclass
 │                               #   (tau, remove_common_features, use_delta_correction)
 ├── topk_sae_model.py           # TopKSparseAutoencoder, load/save/download helpers
-├── data_loader.py              # load_combined() + re-exports from SparseCAA
+├── data_loader.py              # load_combined() plus saved CAA-compatible steering split
 ├── finetune_sae.py             # Residual-stream activation collection + MSE fine-tuning
 ├── extract_sparse_vectors.py   # τ-masked mean + common removal → persona vecs
 ├── evaluate.py                 # Pre-TopK steering hook with Δ correction + A/B evaluation
-├── geometry.py                 # Thin wrapper over SAE.SparseCAA.geometry
+├── geometry.py                 # Displacement-vector geometry over SAE.SparseCAA.geometry
 └── run_pipeline.py             # CLI entry point
 ```
 
