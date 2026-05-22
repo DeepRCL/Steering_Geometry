@@ -48,7 +48,7 @@ from .circumplex_utils import (
     load_R_matrix,
     flatten_off_diagonal,
 )
-from .metrics import compute_all_metrics
+from .metrics import compute_all_metrics, residualize_transfer_matrix
 from .config import TransferExperimentConfig
 from .steering_method import SteeringMethod
 
@@ -350,6 +350,18 @@ def save_method_outputs(
     with open(method_dir / "metrics.json", "w") as f:
         json.dump(metrics_dict, f, indent=2)
 
+    if "residualized" in metrics_dict:
+        T_resid = residualize_transfer_matrix(T)
+        np.save(method_dir / "T_matrix_residualized.npy", T_resid)
+
+        T_resid_json: Dict[str, Dict[str, float]] = {}
+        for i, va in enumerate(CIRCUMPLEX_ORDER):
+            T_resid_json[va] = {}
+            for j, vb in enumerate(CIRCUMPLEX_ORDER):
+                T_resid_json[va][vb] = float(T_resid[i, j])
+        with open(method_dir / "T_matrix_residualized.json", "w") as f:
+            json.dump(T_resid_json, f, indent=2)
+
     # run metadata for cache invalidation
     if run_metadata is not None:
         with open(method_dir / "run_metadata.json", "w", encoding="utf-8") as f:
@@ -358,6 +370,18 @@ def save_method_outputs(
     # Visualisations
     plot_T_heatmap(T, method_name, alpha, method_dir / "T_heatmap.png")
     plot_bmd_bin(metrics_dict, method_name, method_dir / "bmd_bin_plot.png")
+    if "residualized" in metrics_dict:
+        plot_T_heatmap(
+            residualize_transfer_matrix(T),
+            f"{method_name} residualized",
+            alpha,
+            method_dir / "T_heatmap_residualized.png",
+        )
+        plot_bmd_bin(
+            metrics_dict["residualized"],
+            f"{method_name} residualized",
+            method_dir / "bmd_bin_plot_residualized.png",
+        )
 
     print(f"Outputs for '{method_name}' saved to {method_dir}")
     return method_dir
@@ -609,6 +633,12 @@ def generate_comparison_table(output_dir: Path) -> None:
                 "BMD_rho": m.get("BMD_rho", float("nan")),
                 "AOG": m.get("AOG", float("nan")),
                 "CFS": m.get("CFS", float("nan")),
+                "mean_transfer": m.get("transfer_summary", {}).get("off_diagonal_mean_transfer", float("nan")),
+                "positive_fraction": m.get("transfer_summary", {}).get("off_diagonal_positive_fraction", float("nan")),
+                "resid_CTC_rho": m.get("residualized", {}).get("CTC_rho", float("nan")),
+                "resid_BMD_rho": m.get("residualized", {}).get("BMD_rho", float("nan")),
+                "resid_AOG": m.get("residualized", {}).get("AOG", float("nan")),
+                "resid_CFS": m.get("residualized", {}).get("CFS", float("nan")),
             }
         )
 
@@ -623,6 +653,86 @@ def generate_comparison_table(output_dir: Path) -> None:
 
     _plot_comparison_table(records, output_dir / "comparison_table.png")
     print(f"Comparison table saved to {output_dir}")
+
+
+def recompute_metrics_from_saved_results(
+    output_dir: Path,
+    relations_path: Path,
+    force_plots: bool = True,
+) -> None:
+    """Recompute metrics/plots from existing T matrices without model inference.
+
+    This is useful when adding new analysis metrics after a costly experiment
+    has already produced ``T_matrix.npy`` files.  Each method subdirectory under
+    ``output_dir`` is scanned; if ``T_matrix.npy`` exists, ``metrics.json`` is
+    replaced with freshly computed raw and residualized metrics, and residualized
+    matrix/plot artifacts are written.
+    """
+    output_dir = Path(output_dir)
+    R_matrix = load_R_matrix(Path(relations_path))
+    updated = 0
+
+    for method_dir in sorted(output_dir.iterdir()):
+        if not method_dir.is_dir():
+            continue
+        matrix_path = method_dir / "T_matrix.npy"
+        if not matrix_path.exists():
+            continue
+
+        method_name = method_dir.name
+        alpha = 0.0
+        old_metrics_path = method_dir / "metrics.json"
+        if old_metrics_path.exists():
+            with open(old_metrics_path, "r", encoding="utf-8") as f:
+                old_metrics = json.load(f)
+            method_name = old_metrics.get("method", method_name)
+            alpha = float(old_metrics.get("alpha", alpha))
+
+        T = np.load(matrix_path)
+        metrics_dict = compute_all_metrics(
+            T,
+            R_matrix,
+            method_name=method_name,
+            alpha=alpha,
+        )
+
+        with open(method_dir / "metrics.json", "w", encoding="utf-8") as f:
+            json.dump(metrics_dict, f, indent=2)
+
+        T_resid = residualize_transfer_matrix(T)
+        np.save(method_dir / "T_matrix_residualized.npy", T_resid)
+        T_resid_json: Dict[str, Dict[str, float]] = {}
+        for i, va in enumerate(CIRCUMPLEX_ORDER):
+            T_resid_json[va] = {}
+            for j, vb in enumerate(CIRCUMPLEX_ORDER):
+                T_resid_json[va][vb] = float(T_resid[i, j])
+        with open(method_dir / "T_matrix_residualized.json", "w", encoding="utf-8") as f:
+            json.dump(T_resid_json, f, indent=2)
+
+        if force_plots:
+            plot_T_heatmap(T, method_name, alpha, method_dir / "T_heatmap.png")
+            plot_bmd_bin(metrics_dict, method_name, method_dir / "bmd_bin_plot.png")
+            plot_T_heatmap(
+                T_resid,
+                f"{method_name} residualized",
+                alpha,
+                method_dir / "T_heatmap_residualized.png",
+            )
+            plot_bmd_bin(
+                metrics_dict["residualized"],
+                f"{method_name} residualized",
+                method_dir / "bmd_bin_plot_residualized.png",
+            )
+
+        updated += 1
+        print(f"Recomputed metrics from saved T matrix: {method_dir}")
+
+    if updated == 0:
+        print(f"No saved T_matrix.npy files found under {output_dir}")
+        return
+
+    generate_comparison_table(output_dir)
+    print(f"Post-processing complete: updated {updated} method(s).")
 
 
 def _diverging_cell_color(
@@ -652,11 +762,29 @@ def _diverging_cell_color(
 
 def _plot_comparison_table(records: list, save_path: Path) -> None:
     """Render the comparison table as a matplotlib figure."""
-    columns = ["Method", "CTC-ρ", "BMD-ρ", "AOG (pp)", "CFS"]
-    null_vals = {"CTC-ρ": 0.0, "BMD-ρ": 0.0, "AOG (pp)": 0.0, "CFS": 0.5}
+    columns = [
+        "Method", "Mean Δ", "Pos Frac", "Raw CTC", "Raw BMD",
+        "Raw AOG", "Raw CFS", "Resid CTC", "Resid BMD", "Resid AOG", "Resid CFS",
+    ]
+    null_vals = {
+        "Mean Δ": 0.0,
+        "Pos Frac": 0.5,
+        "Raw CTC": 0.0,
+        "Raw BMD": 0.0,
+        "Raw AOG": 0.0,
+        "Raw CFS": 0.5,
+        "Resid CTC": 0.0,
+        "Resid BMD": 0.0,
+        "Resid AOG": 0.0,
+        "Resid CFS": 0.5,
+    }
 
     # Find best value per numeric column for bolding
-    keys = ["CTC_rho", "BMD_rho", "AOG", "CFS"]
+    keys = [
+        "mean_transfer", "positive_fraction", "CTC_rho", "BMD_rho",
+        "AOG", "CFS", "resid_CTC_rho", "resid_BMD_rho",
+        "resid_AOG", "resid_CFS",
+    ]
     col_keys = dict(zip(columns[1:], keys))
     best = {}
     for col, key in col_keys.items():
@@ -676,10 +804,12 @@ def _plot_comparison_table(records: list, save_path: Path) -> None:
             row_texts.append(fmt)
 
             null = null_vals[col]
-            if col in ("CTC-ρ", "BMD-ρ"):
+            if col in ("Raw CTC", "Raw BMD", "Resid CTC", "Resid BMD"):
                 vmin, vmax = -1.0, 1.0
-            elif col == "AOG (pp)":
+            elif col in ("Mean Δ", "Raw AOG", "Resid AOG"):
                 vmin, vmax = -0.30, 0.30
+            elif col == "Pos Frac":
+                vmin, vmax = 0.0, 1.0
             else:  # CFS
                 vmin, vmax = 0.0, 1.0
             row_colors.append(_diverging_cell_color(val, null, vmin, vmax))
@@ -690,7 +820,7 @@ def _plot_comparison_table(records: list, save_path: Path) -> None:
     n_rows = len(records)
     n_cols = len(columns)
     fig_h = max(2.0, 0.5 * n_rows + 1.2)
-    fig, ax = plt.subplots(figsize=(11, fig_h))
+    fig, ax = plt.subplots(figsize=(17, fig_h))
     ax.axis("off")
 
     table = ax.table(

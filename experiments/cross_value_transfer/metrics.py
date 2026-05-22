@@ -33,6 +33,71 @@ from .circumplex_utils import (
 _N = len(CIRCUMPLEX_ORDER)
 
 
+def residualize_transfer_matrix(T_matrix: np.ndarray) -> np.ndarray:
+    """Remove method/value main effects from off-diagonal transfer entries.
+
+    The raw transfer matrix often contains a large generic lift:
+    some steering values improve almost every evaluation value, and some
+    evaluation values improve under almost every steering direction.  To ask
+    whether there is remaining circumplex-specific structure, fit the additive
+    model
+
+        T[A,B] = intercept + steering_main[A] + eval_main[B] + residual[A,B]
+
+    on the 380 off-diagonal entries and return the residual matrix.  The
+    diagonal is set to 0 because all current structure metrics ignore it.
+    """
+    T = np.asarray(T_matrix, dtype=np.float64)
+    n = T.shape[0]
+    if T.shape != (n, n):
+        raise ValueError(f"Expected a square matrix, got shape {T.shape}")
+
+    rows = []
+    y = []
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            row = np.zeros(1 + n + n, dtype=np.float64)
+            row[0] = 1.0
+            row[1 + i] = 1.0
+            row[1 + n + j] = 1.0
+            rows.append(row)
+            y.append(T[i, j])
+
+    X = np.vstack(rows)
+    y_arr = np.array(y, dtype=np.float64)
+    coef, *_ = np.linalg.lstsq(X, y_arr, rcond=None)
+    fitted = X @ coef
+    residuals = y_arr - fitted
+
+    out = np.zeros_like(T, dtype=np.float64)
+    k = 0
+    for i in range(n):
+        for j in range(n):
+            if i == j:
+                continue
+            out[i, j] = residuals[k]
+            k += 1
+    return out
+
+
+def compute_transfer_summary(T_matrix: np.ndarray) -> dict:
+    """Summarise generic transfer effects that can masquerade as structure."""
+    T = np.asarray(T_matrix, dtype=np.float64)
+    off_diag = flatten_off_diagonal(T)
+    diag = np.diag(T)
+    return {
+        "mean_transfer": float(np.mean(T)),
+        "off_diagonal_mean_transfer": float(np.mean(off_diag)),
+        "diagonal_mean_transfer": float(np.mean(diag)),
+        "off_diagonal_positive_fraction": float(np.mean(off_diag > 0.0)),
+        "off_diagonal_negative_fraction": float(np.mean(off_diag < 0.0)),
+        "min_transfer": float(np.min(T)),
+        "max_transfer": float(np.max(T)),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # METRIC 1: Circumplex Transfer Correlation (CTC-ρ)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -178,6 +243,7 @@ def compute_all_metrics(
     R_matrix: np.ndarray,
     method_name: str = "",
     alpha: float = 0.0,
+    include_residualized: bool = True,
 ) -> dict:
     """Run all three metrics and CFS, returning a metrics.json-ready dict.
 
@@ -204,9 +270,10 @@ def compute_all_metrics(
     aog, t_adj, t_opp = compute_aog(T_matrix)
     cfs, ctc_norm, bmd_norm, aog_norm = compute_cfs(ctc_rho, bmd_rho, aog)
 
-    return {
+    out = {
         "method": method_name,
         "alpha": alpha,
+        "transfer_summary": compute_transfer_summary(T_matrix),
         "CTC_rho": ctc_rho,
         "CTC_pvalue": ctc_pvalue,
         "BMD_rho": bmd_rho,
@@ -220,3 +287,36 @@ def compute_all_metrics(
         "BMD_norm": bmd_norm,
         "AOG_norm": aog_norm,
     }
+
+    if include_residualized:
+        T_resid = residualize_transfer_matrix(T_matrix)
+        flat_T_resid = flatten_off_diagonal(T_resid)
+        resid_ctc_rho, resid_ctc_pvalue = compute_ctc_rho(flat_R, flat_T_resid)
+        resid_bmd_rho, resid_bmd_pvalue, resid_bin_means = compute_bmd_rho(T_resid)
+        resid_aog, resid_t_adj, resid_t_opp = compute_aog(T_resid)
+        resid_cfs, resid_ctc_norm, resid_bmd_norm, resid_aog_norm = compute_cfs(
+            resid_ctc_rho,
+            resid_bmd_rho,
+            resid_aog,
+        )
+        out["residualized"] = {
+            "description": (
+                "Metrics after regressing off-diagonal T[A,B] on steering-value "
+                "main effects, eval-value main effects, and a global intercept."
+            ),
+            "transfer_summary": compute_transfer_summary(T_resid),
+            "CTC_rho": resid_ctc_rho,
+            "CTC_pvalue": resid_ctc_pvalue,
+            "BMD_rho": resid_bmd_rho,
+            "BMD_pvalue": resid_bmd_pvalue,
+            "bin_means": {str(k): v for k, v in resid_bin_means.items()},
+            "AOG": resid_aog,
+            "T_adjacent": resid_t_adj,
+            "T_opposite": resid_t_opp,
+            "CFS": resid_cfs,
+            "CTC_norm": resid_ctc_norm,
+            "BMD_norm": resid_bmd_norm,
+            "AOG_norm": resid_aog_norm,
+        }
+
+    return out

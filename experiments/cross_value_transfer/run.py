@@ -48,7 +48,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from experiments.cross_value_transfer.config import TransferExperimentConfig
 from experiments.cross_value_transfer.caa_method import CAAMethod
-from experiments.cross_value_transfer.run_transfer_experiment import run_experiment
+from experiments.cross_value_transfer.run_transfer_experiment import (
+    recompute_metrics_from_saved_results,
+    run_experiment,
+)
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -194,6 +197,13 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=False,
         help="Recompute T matrix and metrics even if outputs already exist.",
     )
+    p.add_argument(
+        "--postprocess_existing",
+        action="store_true",
+        default=False,
+        help="Only recompute metrics/plots from existing T_matrix.npy files in "
+             "--output_dir. Does not load the model or run inference.",
+    )
 
     return p
 
@@ -313,7 +323,15 @@ def main(argv=None) -> None:
     print(f"  output_dir     : {cfg.output_dir}")
     print(f"  methods        : {cfg.methods}")
     print(f"  force_recompute: {cfg.force_recompute}")
+    print(f"  postprocess    : {args.postprocess_existing}")
     print()
+
+    if args.postprocess_existing:
+        recompute_metrics_from_saved_results(
+            output_dir=Path(cfg.output_dir),
+            relations_path=Path(cfg.relations_path),
+        )
+        return
 
     # Validate required fields
     if not cfg.methods:
