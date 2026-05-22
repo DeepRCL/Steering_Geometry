@@ -33,6 +33,27 @@ Evaluate SphericalSteer with its native geodesic hook:
         --methods spherical \\
         --alpha 0.9
 
+Evaluate BiPO / optimized vectors with their additive pre-hook:
+
+    python experiments/cross_value_transfer/run.py \\
+        --bipo_run_dir BiPO/focused_tuning/qwen35_opt_20260520_221258/Qwen__Qwen3.5-9B-Base \\
+        --methods bipo \\
+        --alpha 10.0
+
+Evaluate SparseCAA / SAS:
+
+    python experiments/cross_value_transfer/run.py \\
+        --sparsecaa_run_dir SAE/SparseCAA/outputs/Qwen__Qwen3.5-9B-Base \\
+        --methods sparsecaa \\
+        --alpha 4.0
+
+Evaluate QwenScopeCAA:
+
+    python experiments/cross_value_transfer/run.py \\
+        --qwenscope_run_dir SAE/QwenScopeCAA/outputs_qwenscope_l15_k100_final_20260520_1838051/Qwen__Qwen3.5-9B-Base_layer15_k100 \\
+        --methods qwenscope \\
+        --alpha 4.0
+
 Load a saved config JSON (individual flags override it):
 
     python experiments/cross_value_transfer/run.py \\
@@ -54,7 +75,10 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from experiments.cross_value_transfer.config import TransferExperimentConfig
+from experiments.cross_value_transfer.bipo_method import BiPOMethod
 from experiments.cross_value_transfer.caa_method import CAAMethod
+from experiments.cross_value_transfer.qwenscope_method import QwenScopeMethod
+from experiments.cross_value_transfer.sparsecaa_method import SparseCAAMethod
 from experiments.cross_value_transfer.spherical_method import SphericalSteerMethod
 from experiments.cross_value_transfer.run_transfer_experiment import run_experiment
 
@@ -171,6 +195,121 @@ def _build_arg_parser() -> argparse.ArgumentParser:
              "spherical_run_dir/config.json.",
     )
 
+    # ── BiPO / optimized-vector-specific ────────────────────────────────────
+    p.add_argument(
+        "--bipo_run_dir",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to the model-specific BiPO/optimized-vector output directory "
+             "that contains vectors/ and config.json.",
+    )
+    p.add_argument(
+        "--bipo_layer",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Layer index for BiPO vectors. If omitted, read from config.json "
+             "layer_override or geometry_vectors/manifest.json.",
+    )
+    p.add_argument(
+        "--bipo_steer_position",
+        type=str,
+        default=None,
+        choices=["all", "last"],
+        help="BiPO additive pre-hook position. Default: read opt_steer_position "
+             "from bipo_run_dir/config.json.",
+    )
+    p.add_argument(
+        "--bipo_vector_source",
+        type=str,
+        default=None,
+        choices=["vectors", "geometry_vectors"],
+        help="Load ordinary BiPO vectors from vectors/ or transformed vectors "
+             "from geometry_vectors/. Default: vectors.",
+    )
+    p.add_argument(
+        "--bipo_normalize_vectors",
+        action="store_true",
+        default=False,
+        help="Unit-normalise BiPO vectors before steering. By default raw "
+             "optimized-vector magnitudes are preserved.",
+    )
+
+    # ── SparseCAA-specific ───────────────────────────────────────────────────
+    p.add_argument(
+        "--sparsecaa_run_dir",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to the SparseCAA output directory containing sparse_vectors/, "
+             "pipeline_config.json, and sae_finetuned.pt.",
+    )
+    p.add_argument(
+        "--sparsecaa_layer",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Layer index whose MLP output SparseCAA hooks. If omitted, read "
+             "mlp_layer from pipeline_config.json.",
+    )
+    p.add_argument(
+        "--sparsecaa_sae_path",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Optional SAE checkpoint override. Default: sparsecaa_run_dir/sae_finetuned.pt.",
+    )
+    p.add_argument(
+        "--sparsecaa_normalize_vectors",
+        action="store_true",
+        default=False,
+        help="Unit-normalise SparseCAA vectors before steering. By default raw "
+             "sparse-vector magnitudes are preserved.",
+    )
+
+    # ── QwenScopeCAA-specific ────────────────────────────────────────────────
+    p.add_argument(
+        "--qwenscope_run_dir",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to the QwenScopeCAA output directory containing "
+             "sparse_vectors_caa_base/, pipeline_config.json, and "
+             "sae_finetuned_layer{layer}.pt.",
+    )
+    p.add_argument(
+        "--qwenscope_layer",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Layer index whose post-layer residual stream QwenScopeCAA hooks. "
+             "If omitted, read layer from pipeline_config.json.",
+    )
+    p.add_argument(
+        "--qwenscope_sae_path",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Optional Qwen-Scope SAE checkpoint override. Default: run dir's "
+             "fine-tuned SAE checkpoint.",
+    )
+    p.add_argument(
+        "--qwenscope_vector_source",
+        type=str,
+        default=None,
+        choices=["auto", "sparse_vectors_caa_base", "sparse_vectors"],
+        help="Load QwenScope SAE persona vectors. Default auto prefers "
+             "sparse_vectors_caa_base/ and falls back to sparse_vectors/.",
+    )
+    p.add_argument(
+        "--qwenscope_normalize_vectors",
+        action="store_true",
+        default=False,
+        help="Unit-normalise QwenScope vectors before steering. By default raw "
+             "persona-vector magnitudes are preserved.",
+    )
+
     # ── Evaluation ───────────────────────────────────────────────────────────
     p.add_argument(
         "--eval_dataset",
@@ -279,6 +418,34 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.spherical_beta = args.spherical_beta
     if args.spherical_steer_position is not None:
         cfg.spherical_steer_position = args.spherical_steer_position
+    if args.bipo_run_dir is not None:
+        cfg.bipo_run_dir = args.bipo_run_dir
+    if args.bipo_layer is not None:
+        cfg.bipo_layer = args.bipo_layer
+    if args.bipo_steer_position is not None:
+        cfg.bipo_steer_position = args.bipo_steer_position
+    if args.bipo_vector_source is not None:
+        cfg.bipo_vector_source = args.bipo_vector_source
+    if args.bipo_normalize_vectors:
+        cfg.bipo_normalize_vectors = True
+    if args.sparsecaa_run_dir is not None:
+        cfg.sparsecaa_run_dir = args.sparsecaa_run_dir
+    if args.sparsecaa_layer is not None:
+        cfg.sparsecaa_layer = args.sparsecaa_layer
+    if args.sparsecaa_sae_path is not None:
+        cfg.sparsecaa_sae_path = args.sparsecaa_sae_path
+    if args.sparsecaa_normalize_vectors:
+        cfg.sparsecaa_normalize_vectors = True
+    if args.qwenscope_run_dir is not None:
+        cfg.qwenscope_run_dir = args.qwenscope_run_dir
+    if args.qwenscope_layer is not None:
+        cfg.qwenscope_layer = args.qwenscope_layer
+    if args.qwenscope_sae_path is not None:
+        cfg.qwenscope_sae_path = args.qwenscope_sae_path
+    if args.qwenscope_vector_source is not None:
+        cfg.qwenscope_vector_source = args.qwenscope_vector_source
+    if args.qwenscope_normalize_vectors:
+        cfg.qwenscope_normalize_vectors = True
     if args.eval_dataset is not None:
         cfg.eval_dataset_path = args.eval_dataset
     if args.n_eval_samples is not None:
@@ -355,10 +522,76 @@ def _build_methods(cfg: TransferExperimentConfig):
                 steer_position=cfg.spherical_steer_position,
             )
             methods.append(method)
+        elif normalized_method_name in {"bipo", "opt", "optimized"}:
+            if not cfg.bipo_run_dir:
+                raise ValueError(
+                    f"Method '{method_name}' requires --bipo_run_dir to be specified."
+                )
+            output_method_name = (
+                "bipo_geometry"
+                if cfg.bipo_vector_source == "geometry_vectors"
+                else "bipo"
+            )
+            method = BiPOMethod(
+                run_dir=cfg.bipo_run_dir,
+                layer=cfg.bipo_layer,
+                model_name=cfg.model_name,
+                method_name=output_method_name,
+                steer_position=cfg.bipo_steer_position,
+                normalize_vectors=cfg.bipo_normalize_vectors,
+                vector_source=cfg.bipo_vector_source,
+            )
+            methods.append(method)
+        elif normalized_method_name in {"bipo_geometry", "bipo_geometry_vectors"}:
+            if not cfg.bipo_run_dir:
+                raise ValueError(
+                    f"Method '{method_name}' requires --bipo_run_dir to be specified."
+                )
+            method = BiPOMethod(
+                run_dir=cfg.bipo_run_dir,
+                layer=cfg.bipo_layer,
+                model_name=cfg.model_name,
+                method_name="bipo_geometry",
+                steer_position=cfg.bipo_steer_position,
+                normalize_vectors=cfg.bipo_normalize_vectors,
+                vector_source="geometry_vectors",
+            )
+            methods.append(method)
+        elif normalized_method_name in {"sparsecaa", "sparse_caa", "sas"}:
+            if not cfg.sparsecaa_run_dir:
+                raise ValueError(
+                    f"Method '{method_name}' requires --sparsecaa_run_dir to be specified."
+                )
+            method = SparseCAAMethod(
+                run_dir=cfg.sparsecaa_run_dir,
+                layer=cfg.sparsecaa_layer,
+                model_name=cfg.model_name,
+                method_name="sparsecaa",
+                sae_path=cfg.sparsecaa_sae_path,
+                normalize_vectors=cfg.sparsecaa_normalize_vectors,
+            )
+            methods.append(method)
+        elif normalized_method_name in {"qwenscope", "qwen_scope", "qwenscopecaa", "qscope"}:
+            if not cfg.qwenscope_run_dir:
+                raise ValueError(
+                    f"Method '{method_name}' requires --qwenscope_run_dir to be specified."
+                )
+            method = QwenScopeMethod(
+                run_dir=cfg.qwenscope_run_dir,
+                layer=cfg.qwenscope_layer,
+                model_name=cfg.model_name,
+                method_name="qwenscope",
+                sae_path=cfg.qwenscope_sae_path,
+                vector_source=cfg.qwenscope_vector_source,
+                normalize_vectors=cfg.qwenscope_normalize_vectors,
+            )
+            methods.append(method)
         else:
             raise ValueError(
                 f"Unknown method '{method_name}'. "
-                f"Currently supported: ['caa', 'caa_geometry', 'spherical']."
+                "Currently supported: "
+                "['caa', 'caa_geometry', 'spherical', 'bipo', 'bipo_geometry', "
+                "'sparsecaa', 'qwenscope']."
             )
     return methods
 
@@ -385,6 +618,20 @@ def main(argv=None) -> None:
     print(f"  spherical_kappa: {cfg.spherical_kappa!r}  (None = run config)")
     print(f"  spherical_beta : {cfg.spherical_beta!r}  (None = run config)")
     print(f"  spherical_pos  : {cfg.spherical_steer_position!r}  (None = run config)")
+    print(f"  bipo_run_dir   : {cfg.bipo_run_dir}")
+    print(f"  bipo_layer     : {cfg.bipo_layer!r}  (None = auto-discover)")
+    print(f"  bipo_pos       : {cfg.bipo_steer_position!r}  (None = run config)")
+    print(f"  bipo_vector_src: {cfg.bipo_vector_source}")
+    print(f"  bipo_norm_vecs : {cfg.bipo_normalize_vectors}")
+    print(f"  sparsecaa_dir  : {cfg.sparsecaa_run_dir}")
+    print(f"  sparsecaa_layer: {cfg.sparsecaa_layer!r}  (None = run config)")
+    print(f"  sparsecaa_sae  : {cfg.sparsecaa_sae_path!r}  (None = run dir)")
+    print(f"  sparsecaa_norm : {cfg.sparsecaa_normalize_vectors}")
+    print(f"  qwenscope_dir  : {cfg.qwenscope_run_dir}")
+    print(f"  qwenscope_layer: {cfg.qwenscope_layer!r}  (None = run config)")
+    print(f"  qwenscope_sae  : {cfg.qwenscope_sae_path!r}  (None = run dir)")
+    print(f"  qwenscope_vec  : {cfg.qwenscope_vector_source}")
+    print(f"  qwenscope_norm : {cfg.qwenscope_normalize_vectors}")
     print(f"  eval_dataset   : {cfg.eval_dataset_path}")
     print(f"  n_eval_samples : {cfg.n_eval_samples}")
     print(f"  eval_splits    : {cfg.eval_splits if cfg.eval_splits else 'all'}")

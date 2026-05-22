@@ -67,6 +67,66 @@ class TransferExperimentConfig:
     """Optional override for SphericalSteer hook position: ``"last"`` or
     ``"all"``.  If None, read from ``{spherical_run_dir}/config.json``."""
 
+    # ── BiPO / optimized-vector-specific ──────────────────────────────────
+    bipo_run_dir: str = ""
+    """Path to the model-specific BiPO/optimized-vector output directory that
+    directly contains ``vectors/`` and ``config.json``."""
+
+    bipo_layer: Optional[int] = None
+    """Layer index to load for BiPO vectors.  If None, read from
+    ``config.json`` layer_override or ``geometry_vectors/manifest.json``."""
+
+    bipo_steer_position: Optional[str] = None
+    """Optional override for BiPO hook position: ``"all"`` or ``"last"``.
+    If None, read ``opt_steer_position`` from ``{bipo_run_dir}/config.json``."""
+
+    bipo_vector_source: str = "vectors"
+    """Which BiPO vectors to evaluate: ``"vectors"`` for ordinary learned
+    vectors, or ``"geometry_vectors"`` for transformed geometry vectors."""
+
+    bipo_normalize_vectors: bool = False
+    """If True, unit-normalise BiPO vectors before steering.  Defaults to False
+    to match the original optimized-vector evaluator."""
+
+    # ── SparseCAA-specific ─────────────────────────────────────────────────
+    sparsecaa_run_dir: str = ""
+    """Path to the SparseCAA output directory that directly contains
+    ``sparse_vectors/``, ``pipeline_config.json``, and ``sae_finetuned.pt``."""
+
+    sparsecaa_layer: Optional[int] = None
+    """Layer index whose MLP output SparseCAA hooks. If None, read
+    ``mlp_layer`` from ``{sparsecaa_run_dir}/pipeline_config.json``."""
+
+    sparsecaa_sae_path: Optional[str] = None
+    """Optional override for the SAE checkpoint. If None, use
+    ``{sparsecaa_run_dir}/sae_finetuned.pt`` when present."""
+
+    sparsecaa_normalize_vectors: bool = False
+    """If True, unit-normalise SparseCAA sparse vectors before steering.
+    Defaults to False to match the original SparseCAA evaluator."""
+
+    # ── QwenScopeCAA-specific ───────────────────────────────────────────────
+    qwenscope_run_dir: str = ""
+    """Path to the QwenScopeCAA output directory that directly contains
+    ``sparse_vectors_caa_base/``, ``pipeline_config.json``, and
+    ``sae_finetuned_layer{layer}.pt``."""
+
+    qwenscope_layer: Optional[int] = None
+    """Transformer layer whose post-layer residual stream QwenScopeCAA hooks.
+    If None, read ``layer`` from ``{qwenscope_run_dir}/pipeline_config.json``."""
+
+    qwenscope_sae_path: Optional[str] = None
+    """Optional override for the Qwen-Scope SAE checkpoint. If None, use the
+    run's fine-tuned SAE checkpoint."""
+
+    qwenscope_vector_source: str = "auto"
+    """Which QwenScope persona vectors to load: ``"auto"`` prefers
+    ``sparse_vectors_caa_base/`` and falls back to ``sparse_vectors/``."""
+
+    qwenscope_normalize_vectors: bool = False
+    """If True, unit-normalise QwenScope persona vectors before steering.
+    Defaults to False to match the original evaluator."""
+
     # ── Evaluation dataset ─────────────────────────────────────────────────
     eval_dataset_path: str = (
         "experiments/cross_value_transfer/data/"
@@ -144,6 +204,24 @@ class TransferExperimentConfig:
             spherical_kappa=self.spherical_kappa,
             spherical_beta=self.spherical_beta,
             spherical_steer_position=self.spherical_steer_position,
+            bipo_run_dir=abs_if_relative(self.bipo_run_dir),
+            bipo_layer=self.bipo_layer,
+            bipo_steer_position=self.bipo_steer_position,
+            bipo_vector_source=self.bipo_vector_source,
+            bipo_normalize_vectors=self.bipo_normalize_vectors,
+            sparsecaa_run_dir=abs_if_relative(self.sparsecaa_run_dir),
+            sparsecaa_layer=self.sparsecaa_layer,
+            sparsecaa_sae_path=(
+                None if self.sparsecaa_sae_path is None else abs_if_relative(self.sparsecaa_sae_path)
+            ),
+            sparsecaa_normalize_vectors=self.sparsecaa_normalize_vectors,
+            qwenscope_run_dir=abs_if_relative(self.qwenscope_run_dir),
+            qwenscope_layer=self.qwenscope_layer,
+            qwenscope_sae_path=(
+                None if self.qwenscope_sae_path is None else abs_if_relative(self.qwenscope_sae_path)
+            ),
+            qwenscope_vector_source=self.qwenscope_vector_source,
+            qwenscope_normalize_vectors=self.qwenscope_normalize_vectors,
             eval_dataset_path=abs_if_relative(self.eval_dataset_path),
             n_eval_samples=self.n_eval_samples,
             eval_splits=None if self.eval_splits is None else list(self.eval_splits),

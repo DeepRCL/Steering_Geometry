@@ -38,6 +38,13 @@ BOUNDARY_GROUPS = {
 }
 
 
+def _finite_min_max(values: np.ndarray) -> tuple[float, float]:
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return 0.0, 0.0
+    return float(finite_values.min()), float(finite_values.max())
+
+
 def _short_value_label(value: str) -> str:
     return value.split(":")[-1].strip()
 
@@ -122,6 +129,88 @@ def _plot_embedding_2d(out_path: Path, title: str, coords: np.ndarray) -> None:
     plt.close()
 
 
+def _scale_embedding_to_unit_radius(coords: np.ndarray) -> tuple[np.ndarray, float]:
+    radii = np.linalg.norm(coords, axis=1)
+    scale = float(np.max(radii))
+    if scale <= 0.0 or not np.isfinite(scale):
+        return coords.copy(), 1.0
+    return coords / scale, scale
+
+
+def _plot_similarity_heatmap(
+    out_path: Path,
+    matrix: np.ndarray,
+    title: str,
+    *,
+    vmin: float | None = -1.0,
+    vmax: float | None = 1.0,
+    center: float | None = None,
+    cbar_label: str | None = None,
+) -> None:
+    plt.figure(figsize=(14, 12))
+    cbar_kws = {"label": cbar_label} if cbar_label else None
+    sns.heatmap(
+        matrix,
+        xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+        yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
+        cmap="coolwarm",
+        vmin=vmin,
+        vmax=vmax,
+        center=center,
+        cbar_kws=cbar_kws,
+    )
+    plt.title(title, fontsize=PLOT_TITLE_FONTSIZE)
+    plt.xticks(fontsize=10, rotation=45, ha="right")
+    plt.yticks(fontsize=10)
+    plt.tight_layout()
+    plt.savefig(out_path, dpi=300)
+    plt.close()
+
+
+def _plot_contrast_similarity_heatmap(out_path: Path, matrix: np.ndarray, title_prefix: str) -> dict[str, float]:
+    off_diag = matrix[np.triu_indices_from(matrix, k=1)]
+    lo, hi = _finite_min_max(off_diag)
+    if np.isclose(lo, hi):
+        lo, hi = _finite_min_max(matrix)
+
+    _plot_similarity_heatmap(
+        out_path,
+        matrix,
+        f"{title_prefix}Empirical Cosine Similarities (contrast-scaled)",
+        vmin=lo,
+        vmax=hi,
+        cbar_label=f"cosine, off-diagonal range [{lo:.6f}, {hi:.6f}]",
+    )
+    return {"contrast_vmin": lo, "contrast_vmax": hi}
+
+
+def _plot_residual_similarity_heatmap(out_path: Path, matrix: np.ndarray, title_prefix: str) -> dict[str, float]:
+    residual = matrix.copy()
+    off_diag_mask = ~np.eye(matrix.shape[0], dtype=bool)
+    off_diag_mean = float(residual[off_diag_mask].mean())
+    residual[off_diag_mask] -= off_diag_mean
+    np.fill_diagonal(residual, 0.0)
+
+    off_diag = residual[off_diag_mask]
+    max_abs = float(np.max(np.abs(off_diag))) if off_diag.size else 0.0
+    if max_abs == 0.0:
+        max_abs = 1.0
+
+    _plot_similarity_heatmap(
+        out_path,
+        residual,
+        f"{title_prefix}Empirical Cosine Residuals",
+        vmin=-max_abs,
+        vmax=max_abs,
+        center=0.0,
+        cbar_label=f"cosine minus off-diagonal mean ({off_diag_mean:.6f})",
+    )
+    return {
+        "residual_off_diagonal_mean": off_diag_mean,
+        "residual_max_abs": max_abs,
+    }
+
+
 def _circular_step_distance(i: int, j: int, n: int) -> int:
     return min(abs(i - j), n - abs(i - j))
 
@@ -201,6 +290,16 @@ def mean_center_vectors(vectors: Dict[str, torch.Tensor]) -> Dict[str, torch.Ten
     }
 
 
+def _save_vectors(vectors: Dict[str, torch.Tensor], out_path: Path) -> None:
+    torch.save(
+        {
+            value: vectors[value].detach().cpu().float()
+            for value in SCHWARTZ_CIRCUMPLEX_ORDER
+        },
+        out_path,
+    )
+
+
 def analyze_representation_geometry(
     vectors: Dict[str, torch.Tensor],
     relations_path: str | Path,
@@ -215,6 +314,7 @@ def analyze_representation_geometry(
 
     unit_vectors = _unit_vectors(vectors)
     num_values = len(SCHWARTZ_CIRCUMPLEX_ORDER)
+    _save_vectors(vectors, output_dir / "representation_vectors.pt")
 
     empirical_sim = np.zeros((num_values, num_values))
     for i, v1 in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
@@ -237,37 +337,35 @@ def analyze_representation_geometry(
             "num_pairs": len(emp_flat),
         }, f, indent=2)
 
-    plt.figure(figsize=(14, 12))
-    sns.heatmap(
-        empirical_sim,
-        xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
-        yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
-        cmap="coolwarm",
-        vmin=-1,
-        vmax=1,
-    )
-    plt.title(f"{title_prefix}Empirical Cosine Similarities", fontsize=PLOT_TITLE_FONTSIZE)
-    plt.xticks(fontsize=10, rotation=45, ha="right")
-    plt.yticks(fontsize=10)
-    plt.tight_layout()
-    plt.savefig(output_dir / "empirical_similarity_heatmap.png", dpi=300)
-    plt.close()
+    np.save(output_dir / "empirical_similarity.npy", empirical_sim)
+    np.save(output_dir / "theoretical_similarity.npy", theoretical_sim)
 
-    plt.figure(figsize=(14, 12))
-    sns.heatmap(
-        theoretical_sim,
-        xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
-        yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
-        cmap="coolwarm",
+    _plot_similarity_heatmap(
+        output_dir / "empirical_similarity_heatmap.png",
+        empirical_sim,
+        f"{title_prefix}Empirical Cosine Similarities",
         vmin=-1,
         vmax=1,
     )
-    plt.title("Theoretical Relationships", fontsize=PLOT_TITLE_FONTSIZE)
-    plt.xticks(fontsize=10, rotation=45, ha="right")
-    plt.yticks(fontsize=10)
-    plt.tight_layout()
-    plt.savefig(output_dir / "theoretical_similarity_heatmap.png", dpi=300)
-    plt.close()
+
+    contrast_metadata = _plot_contrast_similarity_heatmap(
+        output_dir / "empirical_similarity_heatmap_contrast.png",
+        empirical_sim,
+        title_prefix,
+    )
+    residual_metadata = _plot_residual_similarity_heatmap(
+        output_dir / "empirical_similarity_heatmap_residual.png",
+        empirical_sim,
+        title_prefix,
+    )
+
+    _plot_similarity_heatmap(
+        output_dir / "theoretical_similarity_heatmap.png",
+        theoretical_sim,
+        "Theoretical Relationships",
+        vmin=-1,
+        vmax=1,
+    )
 
     X = np.stack([unit_vectors[v].numpy() for v in SCHWARTZ_CIRCUMPLEX_ORDER])
 
@@ -303,6 +401,7 @@ def analyze_representation_geometry(
     X_circle = _theoretical_circle_points(num_values)
     rotation, _ = orthogonal_procrustes(X_mds, X_circle)
     X_mds_aligned = X_mds.dot(rotation)
+    X_mds_aligned_scaled, mds_visual_scale = _scale_embedding_to_unit_radius(X_mds_aligned)
 
     group_labels = np.array([value_to_group(val) for val in SCHWARTZ_CIRCUMPLEX_ORDER])
     silhouette = silhouette_score(dist_matrix, group_labels, metric="precomputed")
@@ -390,6 +489,11 @@ def analyze_representation_geometry(
         "procrustes_disparity": float(procrustes_disparity),
         "procrustes_rmse_after_alignment": procrustes_rmse,
         "mds_stress": float(mds.stress_),
+        "empirical_similarity_contrast_vmin": contrast_metadata["contrast_vmin"],
+        "empirical_similarity_contrast_vmax": contrast_metadata["contrast_vmax"],
+        "empirical_similarity_residual_off_diagonal_mean": residual_metadata["residual_off_diagonal_mean"],
+        "empirical_similarity_residual_max_abs": residual_metadata["residual_max_abs"],
+        "mds_visual_rescale_divisor": mds_visual_scale,
     }
     with (output_dir / "geometry_metrics.json").open("w") as f:
         json.dump(geometry_metrics, f, indent=2)
@@ -429,6 +533,41 @@ def analyze_representation_geometry(
     plt.yticks(fontsize=12)
     plt.tight_layout()
     plt.savefig(output_dir / "mds_circumplex.png", dpi=300)
+    plt.close()
+
+    plt.figure(figsize=(15, 15))
+    ax = plt.gca()
+    ax.add_patch(Circle((0, 0), 1, color="lightgray", fill=False, linestyle="--"))
+
+    for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
+        tx, ty = X_circle[i]
+        ax.plot(tx, ty, "x", color="gray", markersize=9)
+
+        ex, ey = X_mds_aligned_scaled[i]
+        color = GROUP_COLORS.get(value_to_group(val), "black")
+        _draw_value_marker(ax, ex, ey, val)
+        ax.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
+        ax.annotate(
+            _short_value_label(val),
+            (ex, ey),
+            xytext=(8, 8),
+            textcoords="offset points",
+            fontsize=PLOT_LABEL_FONTSIZE,
+            fontweight="semibold",
+            color=color,
+            bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
+        )
+
+    _add_group_legend(ax)
+    plt.title(f"{title_prefix}2D MDS Shape (rescaled for display)", fontsize=PLOT_TITLE_FONTSIZE)
+    plt.axis("equal")
+    plt.xlim(-1.2, 1.2)
+    plt.ylim(-1.2, 1.2)
+    plt.grid(alpha=0.2)
+    plt.xticks(fontsize=12)
+    plt.yticks(fontsize=12)
+    plt.tight_layout()
+    plt.savefig(output_dir / "mds_circumplex_rescaled.png", dpi=300)
     plt.close()
 
     plt.figure(figsize=(8, 5))
