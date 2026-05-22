@@ -110,8 +110,9 @@ BEST_ALPHA_BY_METHOD = {
     "sparsecaa": 4.0,
     "odesteer": 20.0,
     "ode": 20.0,
-    "odesteer_vectors": 20.0,
-    "ode_vectors": 20.0,
+    # Saved ODESteer vectors are already displacements at their manifest T.
+    "odesteer_vectors": 1.0,
+    "ode_vectors": 1.0,
     "llm_steering_opt": 40.0,
     "llm-steering-opt": 40.0,
     "llmsteeringopt": 40.0,
