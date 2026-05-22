@@ -135,6 +135,12 @@ def load_eval_instances(
         print(f"  Skipped {skipped_by_split} rows outside eval_splits")
     if not has_split_column:
         print("  CSV has no split column; used per-value shuffled holdout fallback")
+        if not use_all_splits and config.eval_split_fraction > 0.5:
+            print(
+                "  Warning: eval_split_fraction is the fallback eval fraction. "
+                f"{config.eval_split_fraction:.3g} uses most rows for evaluation; "
+                "use 0.1 to mirror CAA/Geometry's default held-out split."
+            )
     if has_split_column and not use_all_splits:
         missing = sorted(allowed_splits - seen_splits)
         if missing:

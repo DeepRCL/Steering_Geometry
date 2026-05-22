@@ -21,7 +21,8 @@ What does ``extract_representative_vector`` do?
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Sequence, Tuple, Union
+from contextlib import contextmanager
+from typing import Any, Dict, Optional, Sequence, Tuple, Union
 
 import torch
 from torch.utils.data import DataLoader
@@ -37,7 +38,101 @@ if _COLD_STEER_ROOT not in sys.path:
 from src.steerer import BaseSteerer, KernelLossSteerer, LossFDSteerer  # noqa: E402
 from src.llm import SteerableLLM  # noqa: E402
 
-Steerer = Union["PreloadedLossFDSteerer", "PreloadedKernelLossSteerer"]
+Steerer = Union["PreloadedLossFDSteerer", "PreloadedKernelLossSteerer", "VectorSteerProxy"]
+
+
+class VectorSteerProxy:
+    """Eval-only steerer that applies a saved representative vector additively.
+
+    Used when ``vectors/*.pt`` exist but per-value steerer checkpoints do not
+    (legacy runs). Full cold-steer FD/kernel hooks need ``steered_params``.
+    """
+
+    _vector_only = True
+
+    def __init__(
+        self,
+        vector: torch.Tensor,
+        eta: float,
+        layer_idx: int,
+    ) -> None:
+        self.vector = vector.detach().float().cpu()
+        self.eta = eta
+        self.layer_idx = layer_idx
+        self.gen_input_ids = None
+        self.gen_attention_mask = None
+
+    @contextmanager
+    def bypass_steering(self):
+        yield
+
+    def reset_steering(self) -> None:
+        pass
+
+
+def make_vector_steering_hook(vector: torch.Tensor, eta: float):
+    """Add ``eta * vector`` to layer hidden states (all token positions)."""
+    scaled = eta * vector
+
+    def hook(module, inp, out):
+        is_tuple = isinstance(out, tuple)
+        h = out[0] if is_tuple else out
+        v = scaled.to(device=h.device, dtype=h.dtype)
+        if h.dim() == 3:
+            h = h + v.view(1, 1, -1)
+        else:
+            h = h + v
+        return ((h,) + out[1:]) if is_tuple else h
+
+    return hook
+
+
+def register_eval_steering_hooks(steerable_llm: SteerableLLM, steerer: Any):
+    """Register forward hooks for Schwartz eval (FD/kernel or vector fallback)."""
+    if getattr(steerer, "_vector_only", False):
+        target = steerer.layer_idx
+
+        def factory(lidx: int):
+            if lidx != target:
+                return lambda _m, _i, o: o
+            return make_vector_steering_hook(steerer.vector, steerer.eta)
+
+        return steerable_llm.register_steering_hooks(factory)
+
+    return steerable_llm.register_steering_hooks(
+        lambda lidx: lambda m, i, o: steerer.steer_output_hook(
+            m, i, o, layer_idx=lidx
+        )
+    )
+
+
+def save_steerer_checkpoint(steerer: BaseSteerer, path: str) -> None:
+    """Persist trained steerer state for eval without retraining."""
+    payload: Dict[str, Any] = {}
+    if getattr(steerer, "steered_params", None) is not None:
+        payload["steered_params"] = {
+            k: v.detach().cpu() for k, v in steerer.steered_params.items()
+        }
+    if getattr(steerer, "loss_data", None) is not None:
+        kappa, loss_v = steerer.loss_data
+        payload["loss_data"] = (
+            {str(k): v.detach().cpu() for k, v in kappa.items()},
+            {str(k): v.detach().cpu() for k, v in loss_v.items()},
+        )
+    torch.save(payload, path)
+
+
+def load_steerer_checkpoint(steerer: BaseSteerer, path: str) -> None:
+    """Restore ``steered_params`` / ``loss_data`` saved by ``save_steerer_checkpoint``."""
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    if payload.get("steered_params") is not None:
+        steerer.steered_params = payload["steered_params"]
+    if payload.get("loss_data") is not None:
+        k0, k1 = payload["loss_data"]
+        steerer.loss_data = (
+            {int(k): v for k, v in k0.items()},
+            {int(k): v for k, v in k1.items()},
+        )
 
 
 class PreloadedLossFDSteerer(LossFDSteerer):

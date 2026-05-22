@@ -6,7 +6,7 @@
     "validation",
     "test"
   ],
-  "eval_split_fraction": 0.1,
+  "eval_split_fraction": 0.9,
   "seed": 42,
   "method": "caa",
   "layer": 15,
