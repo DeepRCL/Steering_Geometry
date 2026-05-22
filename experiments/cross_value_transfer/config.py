@@ -30,7 +30,11 @@ class TransferExperimentConfig:
 
     # ── Steering ───────────────────────────────────────────────────────────
     alpha: float = 20.0
-    """Steering strength multiplier α."""
+    """Fallback steering strength multiplier α."""
+
+    use_method_default_alphas: bool = True
+    """If True, the CLI may attach method-specific best-known α values.
+    Passing ``--alpha`` disables this and forces the same α for every method."""
 
     # ── CAA-specific ───────────────────────────────────────────────────────
     caa_run_dir: str = ""
@@ -66,6 +70,26 @@ class TransferExperimentConfig:
     spherical_steer_position: Optional[str] = None
     """Optional override for SphericalSteer hook position: ``"last"`` or
     ``"all"``.  If None, read from ``{spherical_run_dir}/config.json``."""
+
+    # ── ODESteer-specific ──────────────────────────────────────────────────
+    odesteer_run_dir: str = ""
+    """Optional ODESteer Schwartz output directory.  Required for
+    ``odesteer_vectors``, which loads saved displacement vectors."""
+
+    odesteer_layer: Optional[int] = 18
+    """Layer index for ODESteer.  Defaults to 18; if set to None, falls back
+    to ``caa_layer``."""
+
+    odesteer_type: str = "ODESteer"
+    """ODESteer class name: ``ODESteer`` or ``StepODESteer``."""
+
+    odesteer_solver: str = "euler"
+    odesteer_steps: int = 10
+    odesteer_n_components: int = 8000
+    odesteer_degree: int = 2
+    odesteer_gamma: float = 0.1
+    odesteer_coef0: float = 1.0
+    odesteer_lin_clf_type: str = "lr"
 
     # ── Evaluation dataset ─────────────────────────────────────────────────
     eval_dataset_path: str = (
@@ -136,6 +160,7 @@ class TransferExperimentConfig:
             model_name=self.model_name,
             device=self.device,
             alpha=self.alpha,
+            use_method_default_alphas=self.use_method_default_alphas,
             caa_run_dir=abs_if_relative(self.caa_run_dir),
             caa_layer=self.caa_layer,
             caa_vector_source=self.caa_vector_source,
@@ -144,6 +169,16 @@ class TransferExperimentConfig:
             spherical_kappa=self.spherical_kappa,
             spherical_beta=self.spherical_beta,
             spherical_steer_position=self.spherical_steer_position,
+            odesteer_run_dir=abs_if_relative(self.odesteer_run_dir),
+            odesteer_layer=self.odesteer_layer,
+            odesteer_type=self.odesteer_type,
+            odesteer_solver=self.odesteer_solver,
+            odesteer_steps=self.odesteer_steps,
+            odesteer_n_components=self.odesteer_n_components,
+            odesteer_degree=self.odesteer_degree,
+            odesteer_gamma=self.odesteer_gamma,
+            odesteer_coef0=self.odesteer_coef0,
+            odesteer_lin_clf_type=self.odesteer_lin_clf_type,
             eval_dataset_path=abs_if_relative(self.eval_dataset_path),
             n_eval_samples=self.n_eval_samples,
             eval_splits=None if self.eval_splits is None else list(self.eval_splits),

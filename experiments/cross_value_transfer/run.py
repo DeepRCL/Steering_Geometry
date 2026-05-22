@@ -33,6 +33,12 @@ Evaluate SphericalSteer with its native geodesic hook:
         --methods spherical \\
         --alpha 0.9
 
+Fit and evaluate ODESteer with its native nonlinear hook:
+
+    python experiments/cross_value_transfer/run.py \\
+        --model_name Qwen/Qwen3.5-9B-Base \\
+        --methods odesteer
+
 Load a saved config JSON (individual flags override it):
 
     python experiments/cross_value_transfer/run.py \\
@@ -55,11 +61,28 @@ if str(_PROJECT_ROOT) not in sys.path:
 
 from experiments.cross_value_transfer.config import TransferExperimentConfig
 from experiments.cross_value_transfer.caa_method import CAAMethod
+from experiments.cross_value_transfer.odesteer_method import ODESteerMethod
 from experiments.cross_value_transfer.spherical_method import SphericalSteerMethod
 from experiments.cross_value_transfer.run_transfer_experiment import (
     recompute_metrics_from_saved_results,
     run_experiment,
 )
+
+BEST_ALPHA_BY_METHOD = {
+    # Best Qwen3.5-9B Base A/B next-token values recorded in accuracy_gains.md.
+    "caa": 20.0,
+    "caa_geometry": 20.0,
+    "caa_geometry_vectors": 20.0,
+    "spherical": 0.9,
+    "sphericalsteer": 0.9,
+    "spherical_steer": 0.9,
+    "bipo": 10.0,
+    "sparsecaa": 4.0,
+    "odesteer": 20.0,
+    "ode": 20.0,
+    "odesteer_vectors": 20.0,
+    "ode_vectors": 20.0,
+}
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
@@ -102,7 +125,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=float,
         default=None,
         metavar="FLOAT",
-        help="Steering strength α. Default: 20.0.",
+        help="Force steering strength α for all methods. If omitted, known "
+             "method-specific best α values from accuracy_gains.md are used.",
     )
 
     # ── CAA-specific ─────────────────────────────────────────────────────────
@@ -173,6 +197,36 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="SphericalSteer hook position. Default: read from "
              "spherical_run_dir/config.json.",
     )
+
+    # ── ODESteer-specific ───────────────────────────────────────────────────
+    p.add_argument(
+        "--odesteer_run_dir",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="ODESteer Schwartz output directory. Required for odesteer_vectors.",
+    )
+    p.add_argument(
+        "--odesteer_layer",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Layer index for ODESteer. Default: 18.",
+    )
+    p.add_argument(
+        "--odesteer_type",
+        type=str,
+        default=None,
+        choices=["ODESteer", "StepODESteer"],
+        help="ODESteer class to fit. Default: ODESteer.",
+    )
+    p.add_argument("--odesteer_solver", type=str, default=None, choices=["euler", "midpoint", "rk4"])
+    p.add_argument("--odesteer_steps", type=int, default=None)
+    p.add_argument("--odesteer_n_components", type=int, default=None)
+    p.add_argument("--odesteer_degree", type=int, default=None)
+    p.add_argument("--odesteer_gamma", type=float, default=None)
+    p.add_argument("--odesteer_coef0", type=float, default=None)
+    p.add_argument("--odesteer_lin_clf_type", type=str, default=None)
 
     # ── Evaluation ───────────────────────────────────────────────────────────
     p.add_argument(
@@ -273,6 +327,7 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.device = args.device
     if args.alpha is not None:
         cfg.alpha = args.alpha
+        cfg.use_method_default_alphas = False
     if args.caa_run_dir is not None:
         cfg.caa_run_dir = args.caa_run_dir
     if args.caa_layer is not None:
@@ -289,6 +344,26 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.spherical_beta = args.spherical_beta
     if args.spherical_steer_position is not None:
         cfg.spherical_steer_position = args.spherical_steer_position
+    if args.odesteer_run_dir is not None:
+        cfg.odesteer_run_dir = args.odesteer_run_dir
+    if args.odesteer_layer is not None:
+        cfg.odesteer_layer = args.odesteer_layer
+    if args.odesteer_type is not None:
+        cfg.odesteer_type = args.odesteer_type
+    if args.odesteer_solver is not None:
+        cfg.odesteer_solver = args.odesteer_solver
+    if args.odesteer_steps is not None:
+        cfg.odesteer_steps = args.odesteer_steps
+    if args.odesteer_n_components is not None:
+        cfg.odesteer_n_components = args.odesteer_n_components
+    if args.odesteer_degree is not None:
+        cfg.odesteer_degree = args.odesteer_degree
+    if args.odesteer_gamma is not None:
+        cfg.odesteer_gamma = args.odesteer_gamma
+    if args.odesteer_coef0 is not None:
+        cfg.odesteer_coef0 = args.odesteer_coef0
+    if args.odesteer_lin_clf_type is not None:
+        cfg.odesteer_lin_clf_type = args.odesteer_lin_clf_type
     if args.eval_dataset is not None:
         cfg.eval_dataset_path = args.eval_dataset
     if args.n_eval_samples is not None:
@@ -314,6 +389,17 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
     return cfg
 
 
+def _method_alpha(method_name: str, cfg: TransferExperimentConfig) -> float:
+    if not cfg.use_method_default_alphas:
+        return cfg.alpha
+    return BEST_ALPHA_BY_METHOD.get(method_name.lower(), cfg.alpha)
+
+
+def _attach_method_alpha(method, method_name: str, cfg: TransferExperimentConfig):
+    method.alpha = _method_alpha(method_name, cfg)
+    return method
+
+
 def _build_methods(cfg: TransferExperimentConfig):
     """Instantiate SteeringMethod objects from the method name list."""
     methods = []
@@ -336,7 +422,7 @@ def _build_methods(cfg: TransferExperimentConfig):
                 method_name=output_method_name,
                 vector_source=cfg.caa_vector_source,
             )
-            methods.append(method)
+            methods.append(_attach_method_alpha(method, output_method_name, cfg))
         elif normalized_method_name in {"caa_geometry", "caa_geometry_vectors"}:
             if not cfg.caa_run_dir:
                 raise ValueError(
@@ -349,7 +435,7 @@ def _build_methods(cfg: TransferExperimentConfig):
                 method_name="caa_geometry",
                 vector_source="geometry_vectors",
             )
-            methods.append(method)
+            methods.append(_attach_method_alpha(method, "caa_geometry", cfg))
         elif normalized_method_name in {"spherical", "sphericalsteer", "spherical_steer"}:
             if not cfg.spherical_run_dir:
                 raise ValueError(
@@ -364,11 +450,34 @@ def _build_methods(cfg: TransferExperimentConfig):
                 beta=cfg.spherical_beta,
                 steer_position=cfg.spherical_steer_position,
             )
-            methods.append(method)
+            methods.append(_attach_method_alpha(method, "spherical", cfg))
+        elif normalized_method_name in {"odesteer", "ode"}:
+            method = ODESteerMethod(
+                config=cfg,
+                mode="exact",
+                method_name="odesteer",
+                model_name=cfg.model_name,
+                position="last",
+            )
+            methods.append(_attach_method_alpha(method, "odesteer", cfg))
+        elif normalized_method_name in {"odesteer_vectors", "ode_vectors"}:
+            if not cfg.odesteer_run_dir:
+                raise ValueError(
+                    f"Method '{method_name}' requires --odesteer_run_dir to be specified."
+                )
+            method = ODESteerMethod(
+                config=cfg,
+                mode="vectors",
+                method_name="odesteer_vectors",
+                model_name=cfg.model_name,
+                position="last",
+            )
+            methods.append(_attach_method_alpha(method, "odesteer_vectors", cfg))
         else:
             raise ValueError(
                 f"Unknown method '{method_name}'. "
-                f"Currently supported: ['caa', 'caa_geometry', 'spherical']."
+                "Currently supported: ['caa', 'caa_geometry', 'spherical', "
+                "'odesteer', 'odesteer_vectors']."
             )
     return methods
 
@@ -387,6 +496,7 @@ def main(argv=None) -> None:
     print(f"  model_name     : {cfg.model_name!r}")
     print(f"  device         : {cfg.device}")
     print(f"  alpha          : {cfg.alpha}")
+    print(f"  method_alphas  : {'best defaults' if cfg.use_method_default_alphas else 'forced global'}")
     print(f"  caa_run_dir    : {cfg.caa_run_dir}")
     print(f"  caa_layer      : {cfg.caa_layer!r}  (None = auto-discover)")
     print(f"  caa_vector_src : {cfg.caa_vector_source}")
@@ -395,6 +505,14 @@ def main(argv=None) -> None:
     print(f"  spherical_kappa: {cfg.spherical_kappa!r}  (None = run config)")
     print(f"  spherical_beta : {cfg.spherical_beta!r}  (None = run config)")
     print(f"  spherical_pos  : {cfg.spherical_steer_position!r}  (None = run config)")
+    print(f"  odesteer_dir   : {cfg.odesteer_run_dir}")
+    print(f"  odesteer_layer : {cfg.odesteer_layer!r}")
+    print(f"  odesteer_type  : {cfg.odesteer_type}")
+    print(f"  odesteer_steps : {cfg.odesteer_steps}")
+    print(
+        f"  odesteer_kernel: n={cfg.odesteer_n_components}, "
+        f"degree={cfg.odesteer_degree}, gamma={cfg.odesteer_gamma}"
+    )
     print(f"  eval_dataset   : {cfg.eval_dataset_path}")
     print(f"  n_eval_samples : {cfg.n_eval_samples}")
     print(f"  eval_splits    : {cfg.eval_splits if cfg.eval_splits else 'all'}")

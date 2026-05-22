@@ -71,7 +71,8 @@ def load_eval_instances(
     -------
     dict mapping each value name → list of ``EvalInstance`` objects.
     """
-    rng = random.Random(config.seed)
+    split_rng = random.Random(config.seed)
+    pos_rng = random.Random(config.seed)
     grouped: Dict[str, List[dict]] = {v: [] for v in CIRCUMPLEX_ORDER}
     allowed_splits = set(config.eval_splits or [])
     use_all_splits = not allowed_splits
@@ -103,7 +104,7 @@ def load_eval_instances(
     eval_instances: Dict[str, List[EvalInstance]] = {}
     for value in CIRCUMPLEX_ORDER:
         rows = grouped[value]
-        rng.shuffle(rows)
+        split_rng.shuffle(rows)
         if not has_split_column and not use_all_splits:
             n_holdout = int(len(rows) * config.eval_split_fraction)
             rows = rows[:n_holdout]
@@ -118,7 +119,7 @@ def load_eval_instances(
                     question=row.get("question") or "",
                     positive_answer=row.get("positive_answer") or "",
                     negative_answer=row.get("negative_answer") or "",
-                    pos_is_a=rng.choice([True, False]),
+                    pos_is_a=pos_rng.choice([True, False]),
                 )
             )
         eval_instances[value] = instances
@@ -182,6 +183,7 @@ def _method_metadata(
     config: TransferExperimentConfig,
     method: SteeringMethod,
     model_name: str,
+    alpha: float,
 ) -> dict:
     """Settings that determine a method's T matrix and metrics."""
     metadata = _baseline_metadata(config, model_name)
@@ -189,7 +191,7 @@ def _method_metadata(
         {
             "method": method.name,
             "layer": method.layer,
-            "alpha": config.alpha,
+            "alpha": alpha,
             "relations_path": str(Path(config.relations_path).resolve()),
         }
     )
@@ -279,6 +281,9 @@ def build_T_matrix(
     -------
     np.ndarray of shape (20, 20), dtype float32.
     """
+    if hasattr(method, "prepare"):
+        method.prepare(model_info)
+
     print(f"\nLoading vectors for method '{method.name}' (layer {method.layer})...")
     vectors = method.load_vectors()
 
@@ -917,14 +922,15 @@ def run_experiment(
 
     # ── Per-method evaluation ─────────────────────────────────────────────────
     for method in methods:
+        method_alpha = float(getattr(method, "alpha", config.alpha))
         print(f"\n{'='*60}")
-        print(f"Method: {method.name}  |  layer: {method.layer}  |  α: {config.alpha}")
+        print(f"Method: {method.name}  |  layer: {method.layer}  |  α: {method_alpha}")
         print(f"{'='*60}")
 
         method_dir = output_dir / method.name
         metrics_path = method_dir / "metrics.json"
         metadata_path = method_dir / "run_metadata.json"
-        method_metadata = _method_metadata(config, method, model_name)
+        method_metadata = _method_metadata(config, method, model_name, method_alpha)
 
         if (
             metrics_path.exists()
@@ -940,13 +946,13 @@ def run_experiment(
             print(f"Existing outputs at {method_dir} are stale; recomputing.")
 
         T = build_T_matrix(
-            method, model_info, eval_instances, formatter, baseline_accs, config.alpha
+            method, model_info, eval_instances, formatter, baseline_accs, method_alpha
         )
 
         metrics_dict = compute_all_metrics(
             T, R_matrix,
             method_name=method.name,
-            alpha=config.alpha,
+            alpha=method_alpha,
         )
 
         save_method_outputs(
@@ -955,7 +961,7 @@ def run_experiment(
             metrics_dict,
             baseline_accs,
             output_dir,
-            config.alpha,
+            method_alpha,
             run_metadata=method_metadata,
         )
 
