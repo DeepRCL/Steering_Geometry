@@ -62,6 +62,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from experiments.cross_value_transfer.config import TransferExperimentConfig
 from experiments.cross_value_transfer.caa_method import CAAMethod
 from experiments.cross_value_transfer.odesteer_method import ODESteerMethod
+from experiments.cross_value_transfer.llm_steering_opt_method import LLMSteeringOptMethod
 from experiments.cross_value_transfer.spherical_method import SphericalSteerMethod
 from experiments.cross_value_transfer.run_transfer_experiment import (
     recompute_metrics_from_saved_results,
@@ -82,6 +83,11 @@ BEST_ALPHA_BY_METHOD = {
     "ode": 20.0,
     "odesteer_vectors": 20.0,
     "ode_vectors": 20.0,
+    "llm_steering_opt": 40.0,
+    "llm-steering-opt": 40.0,
+    "llmsteeringopt": 40.0,
+    "steering_opt": 40.0,
+    "steering-opt": 40.0,
 }
 
 
@@ -227,6 +233,33 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument("--odesteer_gamma", type=float, default=None)
     p.add_argument("--odesteer_coef0", type=float, default=None)
     p.add_argument("--odesteer_lin_clf_type", type=str, default=None)
+    # ── llm-steering-opt-specific ───────────────────────────────────────────
+    p.add_argument(
+        "--llm_steering_opt_run_dir",
+        "--llm-steering-opt-run-dir",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to the llm-steering-opt run directory containing "
+             "vectors/manifest.json and config.json.",
+    )
+    p.add_argument(
+        "--llm_steering_opt_layer",
+        "--llm-steering-opt-layer",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Layer index for llm-steering-opt vectors. If omitted, read "
+             "from vectors/manifest.json.",
+    )
+    p.add_argument(
+        "--llm_steering_opt_normalize_vectors",
+        "--llm-steering-opt-normalize-vectors",
+        action="store_true",
+        default=False,
+        help="L2-normalize llm-steering-opt vectors before applying alpha. "
+             "Default preserves native llm-steering-opt vector norms.",
+    )
 
     # ── Evaluation ───────────────────────────────────────────────────────────
     p.add_argument(
@@ -364,6 +397,12 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.odesteer_coef0 = args.odesteer_coef0
     if args.odesteer_lin_clf_type is not None:
         cfg.odesteer_lin_clf_type = args.odesteer_lin_clf_type
+    if args.llm_steering_opt_run_dir is not None:
+        cfg.llm_steering_opt_run_dir = args.llm_steering_opt_run_dir
+    if args.llm_steering_opt_layer is not None:
+        cfg.llm_steering_opt_layer = args.llm_steering_opt_layer
+    if args.llm_steering_opt_normalize_vectors:
+        cfg.llm_steering_opt_normalize_vectors = True
     if args.eval_dataset is not None:
         cfg.eval_dataset_path = args.eval_dataset
     if args.n_eval_samples is not None:
@@ -473,11 +512,31 @@ def _build_methods(cfg: TransferExperimentConfig):
                 position="last",
             )
             methods.append(_attach_method_alpha(method, "odesteer_vectors", cfg))
+        elif normalized_method_name in {
+            "llm_steering_opt",
+            "llm-steering-opt",
+            "llmsteeringopt",
+            "steering_opt",
+            "steering-opt",
+        }:
+            if not cfg.llm_steering_opt_run_dir:
+                raise ValueError(
+                    f"Method '{method_name}' requires "
+                    "--llm_steering_opt_run_dir to be specified."
+                )
+            method = LLMSteeringOptMethod(
+                run_dir=cfg.llm_steering_opt_run_dir,
+                layer=cfg.llm_steering_opt_layer,
+                model_name=cfg.model_name,
+                method_name="llm_steering_opt",
+                normalize_vectors=cfg.llm_steering_opt_normalize_vectors,
+            )
+            methods.append(_attach_method_alpha(method, "llm_steering_opt", cfg))
         else:
             raise ValueError(
                 f"Unknown method '{method_name}'. "
                 "Currently supported: ['caa', 'caa_geometry', 'spherical', "
-                "'odesteer', 'odesteer_vectors']."
+                "'odesteer', 'odesteer_vectors', 'llm_steering_opt']."
             )
     return methods
 
@@ -513,6 +572,9 @@ def main(argv=None) -> None:
         f"  odesteer_kernel: n={cfg.odesteer_n_components}, "
         f"degree={cfg.odesteer_degree}, gamma={cfg.odesteer_gamma}"
     )
+    print(f"  llm_opt_dir    : {cfg.llm_steering_opt_run_dir}")
+    print(f"  llm_opt_layer  : {cfg.llm_steering_opt_layer!r}  (None = manifest)")
+    print(f"  llm_opt_norm   : {cfg.llm_steering_opt_normalize_vectors}")
     print(f"  eval_dataset   : {cfg.eval_dataset_path}")
     print(f"  n_eval_samples : {cfg.n_eval_samples}")
     print(f"  eval_splits    : {cfg.eval_splits if cfg.eval_splits else 'all'}")

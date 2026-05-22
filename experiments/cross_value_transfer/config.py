@@ -90,11 +90,24 @@ class TransferExperimentConfig:
     odesteer_gamma: float = 0.1
     odesteer_coef0: float = 1.0
     odesteer_lin_clf_type: str = "lr"
+    # ── llm-steering-opt-specific ──────────────────────────────────────────
+    llm_steering_opt_run_dir: str = ""
+    """Path to the llm-steering-opt run directory that directly contains
+    ``vectors/manifest.json`` and usually ``config.json``."""
+
+    llm_steering_opt_layer: Optional[int] = None
+    """Layer index for llm-steering-opt vectors. If None, read from
+    ``vectors/manifest.json``."""
+
+    llm_steering_opt_normalize_vectors: bool = False
+    """If True, L2-normalise llm-steering-opt vectors before applying alpha.
+    False mirrors llm-steering-opt's native evaluation, where vector norm is
+    part of the learned steering vector."""
 
     # ── Evaluation dataset ─────────────────────────────────────────────────
     eval_dataset_path: str = (
         "experiments/cross_value_transfer/data/"
-        "touche_gemma4-v2_remaining-validated-final.csv"
+        "final_dataset_200.csv"
     )
     """Path to the held-out MCQ evaluation CSV (Touché/validated)."""
 
@@ -179,6 +192,9 @@ class TransferExperimentConfig:
             odesteer_gamma=self.odesteer_gamma,
             odesteer_coef0=self.odesteer_coef0,
             odesteer_lin_clf_type=self.odesteer_lin_clf_type,
+            llm_steering_opt_run_dir=abs_if_relative(self.llm_steering_opt_run_dir),
+            llm_steering_opt_layer=self.llm_steering_opt_layer,
+            llm_steering_opt_normalize_vectors=self.llm_steering_opt_normalize_vectors,
             eval_dataset_path=abs_if_relative(self.eval_dataset_path),
             n_eval_samples=self.n_eval_samples,
             eval_splits=None if self.eval_splits is None else list(self.eval_splits),

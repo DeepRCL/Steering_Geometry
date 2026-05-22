@@ -43,9 +43,9 @@ from odesteer.lm import HuggingFaceLM
 from odesteer.steer import get_steer_model
 from odesteer.utils import get_project_dir
 
-import config  # noqa: E402 — scripts/schwartz/config.py
-import geometry as geometry_module  # noqa: E402
-import schwartz_eval  # noqa: E402 — scripts/schwartz/schwartz_eval.py (self-contained)
+import config
+import geometry as geometry_module 
+import schwartz_eval
 
 
 def parse_args():
@@ -56,7 +56,7 @@ def parse_args():
     # Model
     parser.add_argument("--model", type=str, default="Qwen/Qwen3.5-9B-Base",
                         help="Model name (short name from _config.py or full HF path)")
-    parser.add_argument("--dtype", type=str, default="float32",
+    parser.add_argument("--dtype", type=str, default="float16",
                         choices=["float16", "bfloat16", "float32"])
 
     # Dataset
@@ -360,8 +360,8 @@ def _default_schwartz_output_dir(args, layer_idx: int) -> str:
     """Default results path under ``results/schwartz/{model}/…/seed_{seed}``."""
     eval_slug = args.eval_metric.replace("_", "-")
     run_name = (
-        f"{args.steer_type}-layer_{layer_idx}-T_{args.T}-train_{args.train_ratio}-"
-        f"eval_{eval_slug}"
+        f"{args.steer_type}-layer_{layer_idx}-T_{args.T}-steps_{args.steps}-"
+        f"train_{args.train_ratio}-eval_{eval_slug}"
     )
     return str(
         get_project_dir() / "results" / "schwartz" / args.model / run_name / f"seed_{args.seed}"
