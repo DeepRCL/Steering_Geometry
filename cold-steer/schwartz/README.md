@@ -119,9 +119,9 @@ N_TRAIN_LIST="1 10 30 50" \
 ## Output layout
 
 ```
-{output_dir}/{model_short}/cold_fd-{training_mode}-eta_{η}-eps_{ε}-layer_{L}-n_train_{N}/
+{output_dir}/{model_short}/cold_fd-{training_mode}-eta_{η}-eps_{ε}-layer_{L}-n_train_{N}-eval_{metric}/
 # or for cold_kernel:
-{output_dir}/{model_short}/cold_kernel-{training_mode}-eta_{η}-kernel_{κ}-layer_{L}-n_train_{N}/
+{output_dir}/{model_short}/cold_kernel-{training_mode}-eta_{η}-kernel_{κ}-layer_{L}-n_train_{N}-eval_{metric}/
 ├── config.json
 ├── training_info.json
 ├── layer_sweep.json                 (only when sweep was run)

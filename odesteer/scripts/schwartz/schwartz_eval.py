@@ -1,47 +1,43 @@
-"""Log-likelihood / A-B next-token steering evaluation under cold-steer hooks.
+"""
+ODESteer Schwartz steering evaluation (self-contained).
 
-Self-contained: all Schwartz evaluation helpers (prompt + token formatting,
-``pos_is_a`` assignment, per-sample scoring, aggregation, plotting) live in
-this one file. Mirrors ``CAA/Geometry/data_loader.PromptFormatter`` +
-``CAA/Geometry/evaluate._score_instance`` for the A/B path, with CAA as the
-gold-standard reference.
+This module is the single home for everything ODESteer needs at eval time:
+
+* Prompt + token formatting helpers, mirroring CAA Geometry
+  ``data_loader.PromptFormatter`` (``format_eval_prompt``,
+  ``_format_base_prompt``) exactly.
+* Per-row A/B next-token scoring: one forward pass per eval row, using the
+  per-row ``pos_is_a`` assigned by ``assign_pos_is_a_caa`` — identical to
+  CAA Geometry ``evaluate._score_instance`` + ``data_loader.DataLoader``.
+* Full-answer mean log-probability scoring (ODESteer's original eval).
+* The main ``evaluate_steering`` entrypoint plus per-value / overall
+  aggregation, including the bar-plot helper used by the pipeline.
+
+CAA is the gold-standard reference: the A/B path here mirrors it without
+modification. The only Schwartz-specific behaviour layered on top is the
+shuffle / RNG flow needed to assign ``pos_is_a`` to our val split (since
+ODESteer does its own stratified split rather than reusing CAA's).
 """
 
 from __future__ import annotations
 
-import json
 import os
 import random
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import numpy as np
 import torch
 import torch.nn.functional as F
 from tqdm import tqdm
 
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-
-from . import data_utils
-from . import method_adapters
-from .config import SCHWARTZ_CIRCUMPLEX_ORDER
-
-
-# ─── Eval metric constants ──────────────────────────────────────────────────
 
 EVAL_METRIC_FULL_LOGPROB = "full_logprob"
 EVAL_METRIC_AB_NEXT_TOKEN = "ab_next_token"
 EVAL_METRICS = (EVAL_METRIC_FULL_LOGPROB, EVAL_METRIC_AB_NEXT_TOKEN)
 
 
-def eval_metric_label(eval_metric: str) -> str:
-    if eval_metric == EVAL_METRIC_AB_NEXT_TOKEN:
-        return "A/B next-token (CAA)"
-    return "Full-answer mean logprob"
+# ─── Instruct / chat-template detection ─────────────────────────────────────
 
-
-# ─── Instruct detection / prompt formatting (CAA-aligned) ───────────────────
 
 def resolve_is_instruct(model_name: Optional[str], tokenizer) -> bool:
     """Match CAA Geometry ``model_loader.load_model`` instruct detection."""
@@ -60,6 +56,9 @@ def resolve_is_instruct(model_name: Optional[str], tokenizer) -> bool:
     return tokenizer_has_chat_template
 
 
+# ─── Prompt formatting (CAA-aligned) ────────────────────────────────────────
+
+
 def format_qa_eval_prompt(
     question: str,
     tokenizer=None,
@@ -68,9 +67,10 @@ def format_qa_eval_prompt(
 ) -> str:
     """Full-answer logprob eval prompt.
 
-    For instruct models the question is wrapped in the chat template (with
-    ``add_generation_prompt=True``) so the eval activation distribution
-    matches training. Falls back to ``"Q: {question}\\nA: "`` otherwise.
+    For instruct models (chat-template available and selected), the question
+    is rendered through ``apply_chat_template(add_generation_prompt=True)``
+    so the eval-time activation distribution matches the chat-template
+    training prompts. Falls back to ``"Q: {question}\\nA: "`` otherwise.
     """
     if use_chat_template and tokenizer is not None and getattr(tokenizer, "chat_template", None):
         is_instruct = (
@@ -129,8 +129,12 @@ def format_ab_eval_tokens(
 ) -> Tuple[List[int], int, int]:
     """Returns ``(token_ids, a_token_id, b_token_id)`` (CAA Geometry style)."""
     eval_prompt = format_ab_eval_prompt(
-        question, positive_answer, negative_answer,
-        pos_is_a, tokenizer, model_name,
+        question,
+        positive_answer,
+        negative_answer,
+        pos_is_a,
+        tokenizer,
+        model_name,
     )
     tokens = tokenizer.encode(eval_prompt, add_special_tokens=True)
     a_id = tokenizer.encode("A", add_special_tokens=False)[-1]
@@ -140,16 +144,20 @@ def format_ab_eval_tokens(
 
 # ─── pos_is_a assignment (CAA-aligned) ──────────────────────────────────────
 
+
 def assign_pos_is_a_caa(
     rows: List[dict],
     value_order: List[str],
     seed: int,
 ) -> None:
-    """Assign ``pos_is_a`` per eval row in CAA Geometry order.
+    """
+    Assign ``pos_is_a`` on each eval row in CAA Geometry order.
 
-    Matches ``CAA/Geometry/data_loader.py::DataLoader._load_and_split`` for
-    the eval portion: one ``random.Random(seed)`` shared across values,
-    per-value sequential ``rng.choice([True, False])`` per row.
+    Matches ``CAA/Geometry/data_loader.py::DataLoader._load_and_split`` for the
+    eval portion: per value, sequentially draw ``rng.choice([True, False])``
+    from a single seeded ``random.Random(seed)`` shared across values. Across
+    the val set this yields ~50/50 positive=A vs positive=B, so a model with
+    "always pick (A)" position bias scores ~50% baseline regardless of bias.
     """
     rng = random.Random(seed)
     by_value: Dict[str, List[dict]] = {v: [] for v in value_order}
@@ -162,19 +170,38 @@ def assign_pos_is_a_caa(
             row["pos_is_a"] = rng.choice([True, False])
 
 
-# ─── Logits → per-sample primitives (CAA-aligned) ───────────────────────────
+# ─── Logits → per-sample scoring primitives (CAA-aligned) ───────────────────
 
-def prepare_qa_completion_inputs(
-    tokenizer,
-    prompt: str,
-    completion: str,
-    device,
-):
-    """Tokenize ``prompt + completion`` for single-forward logprob scoring."""
-    prompt_len = tokenizer(prompt, return_tensors="pt").input_ids.shape[1]
-    full_inputs = tokenizer(prompt + completion, return_tensors="pt").to(device)
-    answer_ids = full_inputs.input_ids[0, prompt_len:]
-    return full_inputs, prompt_len, answer_ids
+
+def score_ab_from_logits(
+    logits_last,
+    a_token_id: int,
+    b_token_id: int,
+    pos_is_a: bool,
+) -> Dict[str, Any]:
+    """Per-sample A/B result dict from last-position logits.
+
+    Mirrors ``CAA/Geometry/evaluate.py::_score_instance``: a single forward
+    pass, soft-max over the last-token logits, ``is_correct = chose_a ==
+    pos_is_a``.
+    """
+    probs = F.softmax(logits_last.float(), dim=-1)
+    prob_a = probs[a_token_id].item()
+    prob_b = probs[b_token_id].item()
+    prob_positive = prob_a if pos_is_a else prob_b
+    prob_negative = prob_b if pos_is_a else prob_a
+    chose_a = prob_a > prob_b
+
+    return {
+        "prob_a": prob_a,
+        "prob_b": prob_b,
+        "prob_positive": prob_positive,
+        "prob_negative": prob_negative,
+        "positive_margin": prob_positive - prob_negative,
+        "chose_a": chose_a,
+        "pos_is_a": pos_is_a,
+        "is_correct": chose_a == pos_is_a,
+    }
 
 
 def mean_completion_logprob_from_logits(
@@ -193,32 +220,21 @@ def mean_completion_logprob_from_logits(
     return float(token_log_probs.sum().item() / answer_ids.numel())
 
 
-def score_ab_from_logits(
-    logits_last,
-    a_token_id: int,
-    b_token_id: int,
-    pos_is_a: bool,
-) -> Dict[str, Any]:
-    """Per-sample A/B result dict, mirroring CAA ``_score_instance``."""
-    probs = F.softmax(logits_last.float(), dim=-1)
-    prob_a = probs[a_token_id].item()
-    prob_b = probs[b_token_id].item()
-    prob_positive = prob_a if pos_is_a else prob_b
-    prob_negative = prob_b if pos_is_a else prob_a
-    chose_a = prob_a > prob_b
-    return {
-        "prob_a": prob_a,
-        "prob_b": prob_b,
-        "prob_positive": prob_positive,
-        "prob_negative": prob_negative,
-        "positive_margin": prob_positive - prob_negative,
-        "chose_a": chose_a,
-        "pos_is_a": pos_is_a,
-        "is_correct": chose_a == pos_is_a,
-    }
+def prepare_qa_completion_inputs(
+    tokenizer,
+    prompt: str,
+    completion: str,
+    device,
+):
+    """Tokenize ``prompt + completion`` for single-forward logprob scoring."""
+    prompt_len = tokenizer(prompt, return_tensors="pt").input_ids.shape[1]
+    full_inputs = tokenizer(prompt + completion, return_tensors="pt").to(device)
+    answer_ids = full_inputs.input_ids[0, prompt_len:]
+    return full_inputs, prompt_len, answer_ids
 
 
 # ─── Aggregation ────────────────────────────────────────────────────────────
+
 
 def aggregate_full_logprob_records(records: List[dict]) -> dict:
     """Aggregate logprob-preference records (lp_pos_* / lp_neg_*)."""
@@ -255,7 +271,7 @@ def aggregate_full_logprob_records(records: List[dict]) -> dict:
 
 
 def aggregate_ab_records(records: List[dict]) -> dict:
-    """Aggregate A/B next-token records (ab_correct_* / margins)."""
+    """Aggregate A/B next-token records."""
     n = len(records)
     if n == 0:
         return {"n_samples": 0}
@@ -317,150 +333,148 @@ def build_eval_payload(
     return payload
 
 
-@torch.no_grad()
-def _logprob_of_completion(
-    steerable_llm,
-    prompt_text: str,
-    completion_text: str,
-    steerer=None,
-) -> float:
-    """Mean per-token log-probability of ``completion_text`` given ``prompt_text``.
+def eval_metric_label(eval_metric: str) -> str:
+    if eval_metric == EVAL_METRIC_AB_NEXT_TOKEN:
+        return "A/B next-token (CAA)"
+    return "Full-answer mean logprob"
 
-    Caller is responsible for hooks (``register_steering_hooks`` /
-    ``bypass_steering``). When ``steerer`` is set, populate
-    ``gen_input_ids`` / ``gen_attention_mask`` for
-    ``LossFDSteerer.steer_output_hook`` (cold-steer eval path).
-    """
-    tokenizer = steerable_llm.tokenizer
-    device = steerable_llm.model.device
-    full_inputs, prompt_len, answer_ids = prepare_qa_completion_inputs(
-        tokenizer, prompt_text, completion_text, device
-    )
-    full_input_ids = full_inputs.input_ids
-    full_attention_mask = full_inputs.get("attention_mask")
 
-    if steerer is not None:
-        steerer.gen_input_ids = full_input_ids
-        steerer.gen_attention_mask = full_attention_mask
-
-    out = steerable_llm(
-        input_ids=full_input_ids, attention_mask=full_attention_mask
-    )
-    return mean_completion_logprob_from_logits(
-        out.logits[0], prompt_len, answer_ids
-    )
+# ─── Per-row scoring tied to HuggingFaceLM hooks ────────────────────────────
 
 
 @torch.no_grad()
-def _score_ab_next_token(
-    steerable_llm,
+def score_ab_next_token(
+    hf_lm,
     row: dict,
     model_name: str,
-    steerer=None,
+    steer_T: float,
     use_steering: bool = False,
-) -> dict:
-    """CAA-style P(A) vs P(B) with optional cold-steer hooks on one forward pass.
+) -> Dict[str, Any]:
+    """CAA Geometry ``_score_instance`` under optional ODESteer steering.
 
-    Expects ``row['pos_is_a']`` to have been pre-assigned by
-    ``assign_pos_is_a_caa`` for the eval set.
+    One forward pass, using the ``pos_is_a`` field assigned by
+    ``assign_pos_is_a_caa``. Steering (if enabled) is applied via
+    ``hf_lm.register_steer_prob_hook`` on the last prompt position so the
+    next-token A/B prediction is affected.
     """
     pos_is_a = bool(row["pos_is_a"])
-    device = steerable_llm.model.device
     tokens, a_id, b_id = format_ab_eval_tokens(
         row["question"],
         row["positive_answer"],
         row["negative_answer"],
         pos_is_a,
-        steerable_llm.tokenizer,
+        hf_lm.tokenizer,
         model_name,
     )
-    input_ids = torch.tensor([tokens], device=device)
-    attention_mask = torch.ones_like(input_ids, device=device)
+    input_ids = torch.tensor([tokens], device=hf_lm.model.device)
 
-    if use_steering and steerer is not None:
-        steerer.reset_steering()
-        # steer_output_hook needs gen_* when hook args carry no input_ids (eval forward)
-        steerer.gen_input_ids = input_ids
-        steerer.gen_attention_mask = attention_mask
-        handles = method_adapters.register_eval_steering_hooks(steerable_llm, steerer)
+    if use_steering and hf_lm.steer_model is not None:
+        hf_lm.register_steer_prob_hook(input_ids.shape[1] - 1, {"T": steer_T})
         try:
-            logits = steerable_llm(
-                input_ids=input_ids, attention_mask=attention_mask
-            ).logits
+            logits = hf_lm.model(input_ids).logits
         finally:
-            for h in handles:
-                h.remove()
+            hf_lm.remove_steer_prob_hook()
     else:
-        with steerer.bypass_steering():
-            logits = steerable_llm(
-                input_ids=input_ids, attention_mask=attention_mask
-            ).logits
+        logits = hf_lm.model(input_ids).logits
 
     return score_ab_from_logits(logits[0, -1, :], a_id, b_id, pos_is_a)
 
 
+@torch.no_grad()
+def compute_full_logprob(
+    hf_lm,
+    prompt: str,
+    completion: str,
+    steer_T: float,
+    use_steering: bool = False,
+) -> float:
+    """Single-forward mean per-token logprob of ``completion`` under prompt."""
+    tokenizer = hf_lm.tokenizer
+    device = hf_lm.model.device
+    full_inputs, prompt_len, answer_ids = prepare_qa_completion_inputs(
+        tokenizer, prompt, completion, device
+    )
+
+    if use_steering and hf_lm.steer_model is not None:
+        hf_lm.register_steer_prob_hook(prompt_len - 1, {"T": steer_T})
+        try:
+            outputs = hf_lm.model(**full_inputs)
+        finally:
+            hf_lm.remove_steer_prob_hook()
+    else:
+        outputs = hf_lm.model(**full_inputs)
+
+    return mean_completion_logprob_from_logits(
+        outputs.logits[0], prompt_len, answer_ids
+    )
+
+
+# ─── Eval orchestration ─────────────────────────────────────────────────────
+
+
 def _plot_eval_accuracy(
-    per_value: Dict[str, dict],
-    overall: dict,
-    method: str,
-    eta: float,
+    per_val: Dict[str, dict],
+    out_dir: str,
+    value_order: List[str],
     eval_metric: str,
-    values: List[str],
-    out_path: str,
+    verbose: bool = True,
 ) -> None:
-    labels = [v for v in values if v in per_value]
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        if verbose:
+            print("  matplotlib not installed, skipping evaluation plot.")
+        return
+
+    labels = [v for v in value_order if v in per_val]
     if not labels:
         return
 
-    base_accs = [per_value[v]["accuracy_baseline"] for v in labels]
-    steer_accs = [per_value[v]["accuracy_steered"] for v in labels]
+    base_accs = [per_val[v]["accuracy_baseline"] for v in labels]
+    steer_accs = [per_val[v]["accuracy_steered"] for v in labels]
 
     x = np.arange(len(labels))
     width = 0.35
 
     fig, ax = plt.subplots(figsize=(max(12, len(labels) * 0.9), 6))
-    ax.bar(x - width / 2, base_accs, width, label="Baseline",
-           color="#90CAF9", edgecolor="#1565C0")
-    ax.bar(x + width / 2, steer_accs, width, label="Steered",
-           color="#A5D6A7", edgecolor="#2E7D32")
+    ax.bar(x - width / 2, base_accs, width, label="Baseline", color="#90CAF9", edgecolor="#1565C0")
+    ax.bar(x + width / 2, steer_accs, width, label="Steered", color="#A5D6A7", edgecolor="#2E7D32")
 
     ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.5, label="Chance (50%)")
     ax.set_ylabel("Accuracy (positive preferred)")
-    ax.set_title(
-        f"{method} — {eval_metric_label(eval_metric)}\n"
-        f"(η={eta}, overall: {overall['accuracy_baseline']:.1%} → "
-        f"{overall['accuracy_steered']:.1%})"
-    )
+    ax.set_title(f"ODESteer — {eval_metric_label(eval_metric)}")
     ax.set_xticks(x)
-    short_labels = [v.split(":")[-1].strip() if ":" in v else v for v in labels]
-    ax.set_xticklabels(short_labels, rotation=45, ha="right", fontsize=9)
-    ax.set_ylim(0, 1.05)
-    ax.legend(loc="upper left")
-    ax.grid(axis="y", alpha=0.3)
+    ax.set_xticklabels(labels, rotation=45, ha="right")
+    ax.legend()
 
     plt.tight_layout()
-    plt.savefig(out_path, dpi=300)
+    plot_path = os.path.join(out_dir, "steering_eval_accuracy.png")
+    fig.savefig(plot_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
+    if verbose:
+        print(f"  Saved evaluation plot → {plot_path}")
 
 
-def evaluate_steerer(
-    steerable_llm,
-    steerers_by_value: Dict[str, Any],
+@torch.no_grad()
+def evaluate_steering(
+    hf_lm,
+    steer_models: Dict[str, Any],
     val_rows: List[dict],
     values: List[str],
-    layer_idx: int,
-    method: str,
-    eta: float,
-    eval_metric: str,
-    model_name: str,
-    n_eval_samples: Optional[int],
-    seed: int,
-    use_chat_template: bool,
-    prompt_template: str,
-    output_dir: str,
+    args,
+    *,
+    get_rows_for_value: Callable[[List[dict], str], List[dict]],
     verbose: bool = True,
 ) -> Dict[str, Any]:
-    """Evaluate one trained steerer per value (metric via ``eval_metric``)."""
+    """Evaluate steering on the validation set.
+
+    The metric is chosen via ``args.eval_metric`` (``full_logprob`` or
+    ``ab_next_token``). For ``ab_next_token`` we first assign ``pos_is_a``
+    on each row using CAA Geometry's sequential per-value RNG flow, then
+    score each row with a single forward pass — identical to CAA's
+    ``_score_instance``.
+    """
+    eval_metric = getattr(args, "eval_metric", EVAL_METRIC_FULL_LOGPROB)
     use_ab = eval_metric == EVAL_METRIC_AB_NEXT_TOKEN
 
     if verbose:
@@ -468,41 +482,34 @@ def evaluate_steerer(
         print(f"  Steering Evaluation ({eval_metric_label(eval_metric)})")
         print("─" * 60)
 
-    records: List[dict] = []
-    eval_values = [v for v in values if v in steerers_by_value]
-    rng = random.Random(seed)
-    device = steerable_llm.model.device
-
     if use_ab:
-        assign_pos_is_a_caa(val_rows, SCHWARTZ_CIRCUMPLEX_ORDER, seed)
+        assign_pos_is_a_caa(val_rows, values, args.seed)
+
+    records: List[dict] = []
+    eval_values = [v for v in values if v in steer_models]
 
     for value in eval_values:
-        steerer = steerers_by_value[value]
-        method_adapters.load_steerer_state_to_device(steerer, device)
-        value_rows = data_utils.get_rows_for_value(val_rows, value)
-        if not value_rows:
-            if verbose:
-                print(f"  {value}: no validation rows, skipping")
+        value_val_rows = get_rows_for_value(val_rows, value)
+        if not value_val_rows:
             continue
-        if (
-            n_eval_samples is not None
-            and n_eval_samples > 0
-            and n_eval_samples < len(value_rows)
-        ):
-            value_rows = rng.sample(value_rows, n_eval_samples)
+        if args.n_eval_samples and args.n_eval_samples < len(value_val_rows):
+            rng = random.Random(args.seed)
+            value_val_rows = rng.sample(value_val_rows, args.n_eval_samples)
+
+        hf_lm.steer_model = steer_models[value]
 
         if verbose:
-            print(f"  Evaluating {value} ({len(value_rows)} samples) ...")
+            print(f"  {value} ({len(value_val_rows)} samples) ...")
 
-        for row in tqdm(value_rows, desc=f"Eval: {value}", leave=False):
+        for row in tqdm(value_val_rows, desc=f"Eval: {value}", leave=False):
             rec = {"value": value}
 
             if use_ab:
-                ab_base = _score_ab_next_token(
-                    steerable_llm, row, model_name, steerer, use_steering=False
+                ab_base = score_ab_next_token(
+                    hf_lm, row, args.model, args.T, use_steering=False
                 )
-                ab_steer = _score_ab_next_token(
-                    steerable_llm, row, model_name, steerer, use_steering=True
+                ab_steer = score_ab_next_token(
+                    hf_lm, row, args.model, args.T, use_steering=True
                 )
                 rec.update({
                     "ab_prob_positive_base": ab_base["prob_positive"],
@@ -515,59 +522,37 @@ def evaluate_steerer(
                     "ab_correct_steer": ab_steer["is_correct"],
                 })
             else:
-                prompt_text = format_qa_eval_prompt(
+                prompt = format_qa_eval_prompt(
                     row["question"],
-                    tokenizer=steerable_llm.tokenizer,
-                    model_name=model_name,
+                    tokenizer=hf_lm.tokenizer,
+                    model_name=args.model,
                 )
                 pos = row["positive_answer"]
                 neg = row["negative_answer"]
-
-                with steerer.bypass_steering():
-                    lp_pos_base = _logprob_of_completion(steerable_llm, prompt_text, pos)
-                    lp_neg_base = _logprob_of_completion(steerable_llm, prompt_text, neg)
-
-                steerer.reset_steering()
-                handles = method_adapters.register_eval_steering_hooks(
-                    steerable_llm, steerer
-                )
-                try:
-                    lp_pos_steer = _logprob_of_completion(
-                        steerable_llm, prompt_text, pos, steerer=steerer
-                    )
-                    lp_neg_steer = _logprob_of_completion(
-                        steerable_llm, prompt_text, neg, steerer=steerer
-                    )
-                finally:
-                    for h in handles:
-                        h.remove()
-
                 rec.update({
-                    "lp_pos_base": lp_pos_base,
-                    "lp_neg_base": lp_neg_base,
-                    "lp_pos_steer": lp_pos_steer,
-                    "lp_neg_steer": lp_neg_steer,
+                    "lp_pos_base": compute_full_logprob(hf_lm, prompt, pos, args.T, use_steering=False),
+                    "lp_neg_base": compute_full_logprob(hf_lm, prompt, neg, args.T, use_steering=False),
+                    "lp_pos_steer": compute_full_logprob(hf_lm, prompt, pos, args.T, use_steering=True),
+                    "lp_neg_steer": compute_full_logprob(hf_lm, prompt, neg, args.T, use_steering=True),
                 })
 
             records.append(rec)
 
-        method_adapters.offload_steerer_state(steerer)
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+    hf_lm.steer_model = None
 
     if not records:
         if verbose:
-            print("  WARNING: no evaluation records collected!")
+            print("  WARNING: no evaluation records!")
         return {}
 
-    payload = build_eval_payload(
+    eval_payload = build_eval_payload(
         eval_metric,
         records,
         values,
-        extra_fields={"method": method, "eta": eta, "layer": layer_idx},
+        extra_fields={"T": args.T, "steer_type": args.steer_type},
     )
-    per_value = payload["per_value"]
-    overall = payload["overall"]
+    per_value = eval_payload["per_value"]
+    overall = eval_payload["overall"]
     delta_key = (
         "mean_delta_positive_margin"
         if use_ab
@@ -575,10 +560,7 @@ def evaluate_steerer(
     )
 
     if verbose:
-        print(
-            f"\n  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} "
-            f"{'Δ Acc':>7} {'Δ':>9}"
-        )
+        print(f"\n  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} {'Δ Acc':>7} {'Δ':>9}")
         print("  " + "-" * 75)
         for value in values:
             if value not in per_value:
@@ -586,33 +568,24 @@ def evaluate_steerer(
             m = per_value[value]
             print(
                 f"  {value:<35} {m['accuracy_baseline']:>9.1%} "
-                f"{m['accuracy_steered']:>10.1%} "
-                f"{m['delta_accuracy']:>+7.1%} "
+                f"{m['accuracy_steered']:>10.1%} {m['delta_accuracy']:>+7.1%} "
                 f"{m.get(delta_key, 0):>+9.4f}"
             )
         print("  " + "-" * 75)
         o = overall
         print(
             f"  {'OVERALL':<35} {o['accuracy_baseline']:>9.1%} "
-            f"{o['accuracy_steered']:>10.1%} "
-            f"{o['delta_accuracy']:>+7.1%} "
+            f"{o['accuracy_steered']:>10.1%} {o['delta_accuracy']:>+7.1%} "
             f"{o.get(delta_key, 0):>+9.4f}\n"
         )
 
-    os.makedirs(output_dir, exist_ok=True)
-    with open(os.path.join(output_dir, "steering_eval_metrics.json"), "w") as f:
-        json.dump(payload, f, indent=2)
+    if getattr(args, "output_dir", None):
+        _plot_eval_accuracy(
+            per_value,
+            args.output_dir,
+            values,
+            eval_metric,
+            verbose=verbose,
+        )
 
-    _plot_eval_accuracy(
-        per_value,
-        overall,
-        method=method,
-        eta=eta,
-        eval_metric=eval_metric,
-        values=values,
-        out_path=os.path.join(output_dir, "steering_eval_accuracy.png"),
-    )
-    if verbose:
-        print(f"  Saved evaluation metrics → {output_dir}/steering_eval_metrics.json")
-
-    return payload
+    return eval_payload

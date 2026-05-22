@@ -110,6 +110,11 @@ def parse_args() -> argparse.Namespace:
     # Output
     p.add_argument("--output_dir", type=str, default=SchwartzColdConfig.output_dir)
     p.add_argument("--no_save_vectors", action="store_true")
+    p.add_argument(
+        "--force_retrain",
+        action="store_true",
+        help="Ignore cached vectors/steerers and train from scratch",
+    )
     p.add_argument("--quiet", action="store_true")
     return p.parse_args()
 
@@ -145,6 +150,7 @@ def main() -> None:
         n_eval_samples=args.n_eval_samples,
         output_dir=args.output_dir,
         save_vectors=not args.no_save_vectors,
+        force_retrain=args.force_retrain,
         verbose=not args.quiet,
     )
 

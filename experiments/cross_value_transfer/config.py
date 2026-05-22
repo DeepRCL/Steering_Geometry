@@ -30,7 +30,11 @@ class TransferExperimentConfig:
 
     # ── Steering ───────────────────────────────────────────────────────────
     alpha: float = 20.0
-    """Steering strength multiplier α."""
+    """Fallback steering strength multiplier α."""
+
+    use_method_default_alphas: bool = True
+    """If True, the CLI may attach method-specific best-known α values.
+    Passing ``--alpha`` disables this and forces the same α for every method."""
 
     # ── CAA-specific ───────────────────────────────────────────────────────
     caa_run_dir: str = ""
@@ -67,6 +71,7 @@ class TransferExperimentConfig:
     """Optional override for SphericalSteer hook position: ``"last"`` or
     ``"all"``.  If None, read from ``{spherical_run_dir}/config.json``."""
 
+<<<<<<< HEAD
     # ── BiPO / optimized-vector-specific ──────────────────────────────────
     bipo_run_dir: str = ""
     """Path to the model-specific BiPO/optimized-vector output directory that
@@ -126,11 +131,45 @@ class TransferExperimentConfig:
     qwenscope_normalize_vectors: bool = False
     """If True, unit-normalise QwenScope persona vectors before steering.
     Defaults to False to match the original evaluator."""
+=======
+    # ── ODESteer-specific ──────────────────────────────────────────────────
+    odesteer_run_dir: str = ""
+    """Optional ODESteer Schwartz output directory.  Required for
+    ``odesteer_vectors``, which loads saved displacement vectors."""
+
+    odesteer_layer: Optional[int] = 18
+    """Layer index for ODESteer.  Defaults to 18; if set to None, falls back
+    to ``caa_layer``."""
+
+    odesteer_type: str = "ODESteer"
+    """ODESteer class name: ``ODESteer`` or ``StepODESteer``."""
+
+    odesteer_solver: str = "euler"
+    odesteer_steps: int = 10
+    odesteer_n_components: int = 8000
+    odesteer_degree: int = 2
+    odesteer_gamma: float = 0.1
+    odesteer_coef0: float = 1.0
+    odesteer_lin_clf_type: str = "lr"
+    # ── llm-steering-opt-specific ──────────────────────────────────────────
+    llm_steering_opt_run_dir: str = ""
+    """Path to the llm-steering-opt run directory that directly contains
+    ``vectors/manifest.json`` and usually ``config.json``."""
+
+    llm_steering_opt_layer: Optional[int] = None
+    """Layer index for llm-steering-opt vectors. If None, read from
+    ``vectors/manifest.json``."""
+
+    llm_steering_opt_normalize_vectors: bool = False
+    """If True, L2-normalise llm-steering-opt vectors before applying alpha.
+    False mirrors llm-steering-opt's native evaluation, where vector norm is
+    part of the learned steering vector."""
+>>>>>>> 897e0f8ebb2f63ae425742d5af16c6246f50e83d
 
     # ── Evaluation dataset ─────────────────────────────────────────────────
     eval_dataset_path: str = (
         "experiments/cross_value_transfer/data/"
-        "touche_gemma4-v2_remaining-validated-final.csv"
+        "final_dataset_200.csv"
     )
     """Path to the held-out MCQ evaluation CSV (Touché/validated)."""
 
@@ -196,6 +235,7 @@ class TransferExperimentConfig:
             model_name=self.model_name,
             device=self.device,
             alpha=self.alpha,
+            use_method_default_alphas=self.use_method_default_alphas,
             caa_run_dir=abs_if_relative(self.caa_run_dir),
             caa_layer=self.caa_layer,
             caa_vector_source=self.caa_vector_source,
@@ -204,6 +244,7 @@ class TransferExperimentConfig:
             spherical_kappa=self.spherical_kappa,
             spherical_beta=self.spherical_beta,
             spherical_steer_position=self.spherical_steer_position,
+<<<<<<< HEAD
             bipo_run_dir=abs_if_relative(self.bipo_run_dir),
             bipo_layer=self.bipo_layer,
             bipo_steer_position=self.bipo_steer_position,
@@ -222,6 +263,21 @@ class TransferExperimentConfig:
             ),
             qwenscope_vector_source=self.qwenscope_vector_source,
             qwenscope_normalize_vectors=self.qwenscope_normalize_vectors,
+=======
+            odesteer_run_dir=abs_if_relative(self.odesteer_run_dir),
+            odesteer_layer=self.odesteer_layer,
+            odesteer_type=self.odesteer_type,
+            odesteer_solver=self.odesteer_solver,
+            odesteer_steps=self.odesteer_steps,
+            odesteer_n_components=self.odesteer_n_components,
+            odesteer_degree=self.odesteer_degree,
+            odesteer_gamma=self.odesteer_gamma,
+            odesteer_coef0=self.odesteer_coef0,
+            odesteer_lin_clf_type=self.odesteer_lin_clf_type,
+            llm_steering_opt_run_dir=abs_if_relative(self.llm_steering_opt_run_dir),
+            llm_steering_opt_layer=self.llm_steering_opt_layer,
+            llm_steering_opt_normalize_vectors=self.llm_steering_opt_normalize_vectors,
+>>>>>>> 897e0f8ebb2f63ae425742d5af16c6246f50e83d
             eval_dataset_path=abs_if_relative(self.eval_dataset_path),
             n_eval_samples=self.n_eval_samples,
             eval_splits=None if self.eval_splits is None else list(self.eval_splits),

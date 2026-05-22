@@ -31,6 +31,18 @@ from config import (
     value_to_group,
 )
 
+# ─── Plotting Constants ─────────────────────────────────────────────────────
+PLOT_LABEL_FONTSIZE = 13
+PLOT_TITLE_FONTSIZE = 18
+PLOT_AXIS_FONTSIZE = 12
+PLOT_LEGEND_FONTSIZE = 13
+PLOT_SCATTER_SIZE = 150
+PLOT_MARKER_SIZE = 12
+EMBEDDING_FIGURE_SIZE = (14, 11)
+HEATMAP_FIGURE_SIZE = (14, 12)
+MDS_FIGURE_SIZE = (15, 15)
+SCATTER_FIGURE_SIZE = (8, 5)
+DIFFERENCE_HEATMAP_SIZE = (12, 10)
 
 # ─── Helper Functions ────────────────────────────────────────────────────────
 
@@ -83,33 +95,42 @@ def _hierarchical_theory_distance(value_a: str, value_b: str) -> Tuple[int, str]
     return 5, "no_relation"
 
 
+def _short_value_label(value: str) -> str:
+    """Extract short label from value name (after ':' if present)."""
+    return value.split(":")[-1].strip() if ":" in value else value
+
+
+def _group_legend_handles():
+    """Create legend handles for higher-order groups."""
+    from matplotlib.lines import Line2D
+    return [
+        Line2D([0], [0], marker="o", color="w", markerfacecolor=c,
+               markersize=PLOT_MARKER_SIZE, label=g)
+        for g, c in GROUP_COLORS.items()
+    ]
+
+
 def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
     """Scatter plot of a 2-D embedding, coloured by Schwartz higher-order group."""
-    plt.figure(figsize=(14, 11))
+    plt.figure(figsize=EMBEDDING_FIGURE_SIZE)
     for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
         group = value_to_group(val)
         color = GROUP_COLORS.get(group, "black")
-        plt.scatter(coords[i, 0], coords[i, 1], c=color, s=150, edgecolors="white", linewidths=1.2)
+        plt.scatter(coords[i, 0], coords[i, 1], c=color, s=PLOT_SCATTER_SIZE, edgecolors="white", linewidths=1.2)
         plt.annotate(
-            val.split(":")[-1].strip(),
+            _short_value_label(val),
             (coords[i, 0], coords[i, 1]),
             xytext=(7, 7),
             textcoords="offset points",
-            fontsize=13,
+            fontsize=PLOT_LABEL_FONTSIZE,
             fontweight="semibold",
             bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.75),
         )
 
-    from matplotlib.lines import Line2D
-    legend_els = [
-        Line2D([0], [0], marker="o", color="w", markerfacecolor=c,
-               markersize=12, label=g)
-        for g, c in GROUP_COLORS.items()
-    ]
-    plt.legend(handles=legend_els, loc="best", fontsize=13)
-    plt.title(title, fontsize=18)
-    plt.xticks(fontsize=12)
-    plt.yticks(fontsize=12)
+    plt.legend(handles=_group_legend_handles(), loc="best", fontsize=PLOT_LEGEND_FONTSIZE)
+    plt.title(title, fontsize=PLOT_TITLE_FONTSIZE)
+    plt.xticks(fontsize=PLOT_AXIS_FONTSIZE)
+    plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
     plt.tight_layout()
     plt.savefig(out_path, dpi=300)
     plt.close()
@@ -224,16 +245,16 @@ def analyze_geometry(
     # ── 4. Heatmaps ──────────────────────────────────────────────
 
     # 4a. Original empirical heatmap (fixed range [-1, 1])
-    plt.figure(figsize=(14, 12))
+    plt.figure(figsize=HEATMAP_FIGURE_SIZE)
     sns.heatmap(
         empirical_sim,
         xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
         yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
         cmap="coolwarm", vmin=-1, vmax=1,
     )
-    plt.title("Empirical Cosine Similarities", fontsize=18)
-    plt.xticks(fontsize=10, rotation=45, ha="right")
-    plt.yticks(fontsize=10)
+    plt.title("Empirical Cosine Similarities", fontsize=PLOT_TITLE_FONTSIZE)
+    plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+    plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap.png"), dpi=300)
     plt.close()
@@ -244,7 +265,7 @@ def analyze_geometry(
     vmin_auto = off_diag_vals.min()
     vmax_auto = off_diag_vals.max()
 
-    plt.figure(figsize=(14, 12))
+    plt.figure(figsize=HEATMAP_FIGURE_SIZE)
     sns.heatmap(
         empirical_sim,
         xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
@@ -255,10 +276,10 @@ def analyze_geometry(
     plt.title(
         f"Empirical Cosine Similarities (contrast-enhanced)\n"
         f"color range: [{vmin_auto:.3f}, {vmax_auto:.3f}]",
-        fontsize=18,
+        fontsize=PLOT_TITLE_FONTSIZE,
     )
-    plt.xticks(fontsize=10, rotation=45, ha="right")
-    plt.yticks(fontsize=10)
+    plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+    plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_enhanced.png"), dpi=300)
     plt.close()
@@ -269,7 +290,7 @@ def analyze_geometry(
     rank_matrix[off_diag_mask] = rank_vals / rank_vals.max()  # normalize to [0,1]
     np.fill_diagonal(rank_matrix, 1.0)  # diagonal = max similarity
 
-    plt.figure(figsize=(14, 12))
+    plt.figure(figsize=HEATMAP_FIGURE_SIZE)
     sns.heatmap(
         rank_matrix,
         xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
@@ -277,23 +298,23 @@ def analyze_geometry(
         cmap="coolwarm",
         vmin=0, vmax=1,
     )
-    plt.title("Empirical Similarity (rank-transformed, 0=least similar, 1=most)", fontsize=18)
-    plt.xticks(fontsize=10, rotation=45, ha="right")
-    plt.yticks(fontsize=10)
+    plt.title("Empirical Similarity (rank-transformed, 0=least similar, 1=most)", fontsize=PLOT_TITLE_FONTSIZE)
+    plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+    plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_ranked.png"), dpi=300)
     plt.close()
 
-    plt.figure(figsize=(14, 12))
+    plt.figure(figsize=HEATMAP_FIGURE_SIZE)
     sns.heatmap(
         theoretical_sim,
         xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
         yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
         cmap="coolwarm", vmin=-1, vmax=1,
     )
-    plt.title("Theoretical Relationships", fontsize=18)
-    plt.xticks(fontsize=10, rotation=45, ha="right")
-    plt.yticks(fontsize=10)
+    plt.title("Theoretical Relationships", fontsize=PLOT_TITLE_FONTSIZE)
+    plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+    plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "theoretical_similarity_heatmap.png"), dpi=300)
     plt.close()
@@ -456,49 +477,53 @@ def analyze_geometry(
         json.dump(geometry_metrics, f, indent=2)
 
     # ── 8. MDS circumplex overlay plot ────────────────────────────
-    plt.figure(figsize=(15, 15))
+    plt.figure(figsize=MDS_FIGURE_SIZE)
     circle_patch = plt.Circle((0, 0), 1, color="lightgray",
                               fill=False, linestyle="--")
     plt.gca().add_patch(circle_patch)
 
     for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
+        # Theoretical position on circle
         tx, ty = X_circle[i]
         plt.plot(tx, ty, "x", color="gray", markersize=9)
 
+        # Empirical position from MDS
         ex, ey = X_mds_aligned[i]
         group = value_to_group(val)
         color = GROUP_COLORS.get(group, "black")
 
         plt.plot(ex, ey, "o", color=color, markersize=10, markeredgecolor="white", markeredgewidth=1.0)
+        # Draw line connecting theoretical to empirical
         plt.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
 
-        label = val.split(":")[-1].strip()
+        # Annotate with short label
         plt.annotate(
-            label,
+            _short_value_label(val),
             (ex, ey),
             xytext=(8, 8),
             textcoords="offset points",
-            fontsize=13,
+            fontsize=PLOT_LABEL_FONTSIZE,
             fontweight="semibold",
             color=color,
             bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
         )
 
-    plt.title("2D MDS Aligned to Theoretical Circumplex", fontsize=18)
+    plt.title("2D MDS Aligned to Theoretical Circumplex", fontsize=PLOT_TITLE_FONTSIZE)
     plt.axis("equal")
+    # Set limits clearly showing unit circle
     scale = np.max(np.abs(X_mds_aligned))
     lim = max(1.2, scale * 1.2)
     plt.xlim(-lim, lim)
     plt.ylim(-lim, lim)
     plt.grid(alpha=0.2)
-    plt.xticks(fontsize=12)
-    plt.yticks(fontsize=12)
+    plt.xticks(fontsize=PLOT_AXIS_FONTSIZE)
+    plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
     plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "mds_circumplex.png"), dpi=300)
     plt.close()
 
     # ── 9. Theory vs empirical scatter ────────────────────────────
-    plt.figure(figsize=(8, 5))
+    plt.figure(figsize=SCATTER_FIGURE_SIZE)
     jitter = np.random.default_rng(random_seed).normal(
         0.0, 0.03, size=len(theo_flat)
     )
@@ -513,7 +538,7 @@ def analyze_geometry(
     plt.close()
 
     # ── 10. Difference heatmap ────────────────────────────────────
-    plt.figure(figsize=(12, 10))
+    plt.figure(figsize=DIFFERENCE_HEATMAP_SIZE)
     sns.heatmap(
         empirical_sim - theoretical_sim,
         xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,

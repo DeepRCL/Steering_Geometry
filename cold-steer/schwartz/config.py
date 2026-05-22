@@ -106,11 +106,12 @@ class SchwartzColdConfig:
     # Behavioral evaluation
     # ``full_logprob`` or ``ab_next_token`` (CAA-style MCQ)
     eval_metric: str = "full_logprob"
-    n_eval_samples: Optional[int] = 30
+    n_eval_samples: Optional[int] = 50
 
     # Output
     output_dir: str = "schwartz_results"
     save_vectors: bool = True
+    force_retrain: bool = False
     verbose: bool = True
 
     def __post_init__(self):

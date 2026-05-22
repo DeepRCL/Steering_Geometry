@@ -34,13 +34,9 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Circle, Wedge
 from tqdm import tqdm
 
-# Ensure steering_opt and repo-root shared utils are importable
+# Ensure steering_opt at the repo root is importable
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-_REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
-if _REPO_ROOT not in sys.path:
-    sys.path.insert(0, _REPO_ROOT)
 import steering_opt
-from shared import schwartz_eval
 
 from .config import (
     SteeringConfig,
@@ -50,6 +46,22 @@ from .config import (
     value_to_group,
 )
 from . import data_utils
+from . import schwartz_eval
+
+# ─── Plotting Constants ──────────────────────────────────────────────────────
+PLOT_LABEL_FONTSIZE = 13
+PLOT_TITLE_FONTSIZE = 18
+PLOT_AXIS_FONTSIZE = 12
+PLOT_LEGEND_FONTSIZE = 13
+PLOT_ANNOTATION_FONTSIZE = 9
+PLOT_SCATTER_SIZE = 150
+PLOT_MARKER_SIZE = 12
+PLOT_MARKER_RADIUS = 0.055
+EMBEDDING_FIGURE_SIZE = (14, 11)
+HEATMAP_FIGURE_SIZE = (14, 12)
+MDS_FIGURE_SIZE = (15, 15)
+SCATTER_FIGURE_SIZE = (8, 5)
+DIFFERENCE_HEATMAP_SIZE = (12, 10)
 
 BOUNDARY_GROUPS = {
     "Hedonism": ("Openness to Change", "Self-Enhancement"),
@@ -78,6 +90,13 @@ class SteeringPipeline:
         self.train_rows: List[dict] = []
         self.val_rows: List[dict] = []
         self.values: List[str] = []
+
+    # ─── Plotting Helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _short_value_label(value: str) -> str:
+        """Extract short label from value name (after ':' if present)."""
+        return value.split(":")[-1].strip() if ":" in value else value
 
     # ─── Model Loading ───────────────────────────────────────────────────
 
@@ -380,260 +399,36 @@ class SteeringPipeline:
         self._log(f"\n  Trained {len(vectors)}/{len(self.values)} vectors\n")
         return vectors
 
-    # ─── Steering Evaluation (Log-Likelihood) ─────────────────────────
-
-    @torch.no_grad()
-    def _compute_logprob(
-        self,
-        prompt: str,
-        completion: str,
-        hook_infos: Optional[list] = None,
-    ) -> float:
-        """
-        Compute the mean per-token log-probability of `completion` given
-        `prompt`, autoregressively. This matches the CAA/SparseCAA/QwenScopeCAA
-        full-answer metric and ensures hooks affect each next-token prediction.
-
-        Returns:
-            Mean log-prob per completion token (higher = model assigns more
-            probability mass to this completion).
-        """
-        completion_text = " " + completion.lstrip()
-        prompt_ids = self.tokenizer.encode(prompt, add_special_tokens=True)
-        completion_ids = self.tokenizer.encode(completion_text, add_special_tokens=False)
-        if not completion_ids:
-            return 0.0
-
-        device = next(self.model.parameters()).device
-        prefix_ids = list(prompt_ids)
-        per_token_lps = []
-
-        for token_id in completion_ids:
-            input_ids = torch.tensor([prefix_ids], device=device)
-            if hook_infos:
-                with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
-                    logits = self.model(input_ids).logits[0, -1, :]
-            else:
-                logits = self.model(input_ids).logits[0, -1, :]
-            per_token_lps.append(F.log_softmax(logits, dim=-1)[token_id].item())
-            prefix_ids.append(token_id)
-
-        return float(np.mean(per_token_lps)) if per_token_lps else 0.0
-
-    @torch.no_grad()
-    def _score_ab_next_token(
-        self,
-        row: dict,
-        hook_infos: Optional[list] = None,
-    ) -> dict:
-        pos_is_a = schwartz_eval.stable_pos_is_a(row, self.config.random_seed)
-        prompt = schwartz_eval.format_ab_eval_prompt(
-            row["question"],
-            row["positive_answer"],
-            row["negative_answer"],
-            pos_is_a,
-            self.tokenizer,
-            self.config.model_name,
-        )
-        tokens = self.tokenizer.encode(prompt, add_special_tokens=True)
-        input_ids = torch.tensor([tokens], device=self.config.device)
-        a_token_id, b_token_id = schwartz_eval.ab_token_ids(self.tokenizer)
-
-        if hook_infos:
-            with steering_opt.hf_hooks_contextmanager(self.model, hook_infos):
-                logits = self.model(input_ids).logits
-        else:
-            logits = self.model(input_ids).logits
-
-        return schwartz_eval.score_ab_from_logits(
-            logits[0, -1, :], a_token_id, b_token_id, pos_is_a
-        )
+    # ─── Steering Evaluation ───────────────────────────────────────────
 
     def evaluate_steering(
         self,
         vectors: Dict[str, torch.Tensor],
         layer: Union[int, List[int]],
     ) -> Dict[str, Any]:
+        """Evaluate steering vectors on the held-out validation set.
+
+        Delegates to :mod:`pipeline.schwartz_eval`. Metric is selected via
+        ``config.eval_metric`` (``full_logprob`` or ``ab_next_token``).
         """
-        Evaluate steering vectors on the held-out validation set.
-
-        Metric is selected via ``config.eval_metric``:
-
-        - ``full_logprob``: mean per-token logprob of positive vs negative answer.
-        - ``ab_next_token``: CAA-style P(A) vs P(B) on an MCQ prompt ending in ``" ("``.
-        """
-        eval_metric = self.config.eval_metric
-        metric_label = schwartz_eval.eval_metric_label(eval_metric)
-        self._log("\n" + "─" * 60)
-        self._log(f"  Steering Evaluation ({metric_label})")
-        self._log("─" * 60)
-
-        layers = self._normalize_layers(layer)
-        alpha = self.config.alpha
-        n_eval = self.config.n_eval_samples
-        use_ab = eval_metric == schwartz_eval.EVAL_METRIC_AB_NEXT_TOKEN
-
-        records: List[dict] = []
-        eval_values = [v for v in self.values if v in vectors]
-
-        for value in eval_values:
-            vec = vectors[value].detach().to(self.config.device)
-            scaled_vec = alpha * vec
-            hook_fn = steering_opt.make_steering_hook_hf(scaled_vec)
-            hook_infos = [(l, hook_fn) for l in layers]
-
-            val_rows = data_utils.get_rows_for_value(self.val_rows, value)
-            if not val_rows:
-                self._log(f"  {value}: no validation rows – skipping")
-                continue
-
-            if n_eval is not None and n_eval < len(val_rows):
-                rng = random.Random(self.config.random_seed)
-                val_rows = rng.sample(val_rows, n_eval)
-
-            self._log(f"  Evaluating {value} ({len(val_rows)} samples) ...")
-
-            pbar = tqdm(val_rows, desc="Eval steering", position=0, leave=True)
-            for row in pbar:
-                pbar.set_description(f"Eval: {value}")
-                rec = {"value": value}
-
-                if use_ab:
-                    ab_base = self._score_ab_next_token(row)
-                    ab_steer = self._score_ab_next_token(row, hook_infos)
-                    rec.update({
-                        "ab_prob_positive_base": ab_base["prob_positive"],
-                        "ab_prob_negative_base": ab_base["prob_negative"],
-                        "ab_margin_base": ab_base["positive_margin"],
-                        "ab_correct_base": ab_base["is_correct"],
-                        "ab_prob_positive_steer": ab_steer["prob_positive"],
-                        "ab_prob_negative_steer": ab_steer["prob_negative"],
-                        "ab_margin_steer": ab_steer["positive_margin"],
-                        "ab_correct_steer": ab_steer["is_correct"],
-                    })
-                else:
-                    prompt = data_utils.format_prompt(
-                        row["question"],
-                        self.tokenizer,
-                        self.config.use_chat_template,
-                        self.config.prompt_template,
-                    )
-                    pos = row["positive_answer"]
-                    neg = row["negative_answer"]
-                    rec.update({
-                        "lp_pos_base": self._compute_logprob(prompt, pos),
-                        "lp_neg_base": self._compute_logprob(prompt, neg),
-                        "lp_pos_steer": self._compute_logprob(prompt, pos, hook_infos),
-                        "lp_neg_steer": self._compute_logprob(prompt, neg, hook_infos),
-                    })
-
-                records.append(rec)
-
-        if not records:
-            self._log("  WARNING: no evaluation records collected!")
-            return {}
-
-        eval_payload = schwartz_eval.build_eval_payload(
-            eval_metric,
-            records,
-            self.values,
-            extra_fields={
-                "alpha": alpha,
-                "layer": layer if isinstance(layer, int) else layers,
-            },
+        return schwartz_eval.evaluate_steering(
+            model=self.model,
+            tokenizer=self.tokenizer,
+            val_rows=self.val_rows,
+            vectors=vectors,
+            values=self.values,
+            layer=layer,
+            alpha=self.config.alpha,
+            eval_metric=self.config.eval_metric,
+            model_name=self.config.model_name,
+            device=self.config.device,
+            output_dir=self.config.output_dir,
+            schwartz_value_order=SCHWARTZ_CIRCUMPLEX_ORDER,
+            random_seed=self.config.random_seed,
+            n_eval_samples=self.config.n_eval_samples,
+            get_rows_for_value=data_utils.get_rows_for_value,
+            log=self._log,
         )
-
-        per_value = eval_payload["per_value"]
-        overall = eval_payload["overall"]
-        delta_key = (
-            "mean_delta_positive_margin"
-            if use_ab
-            else "mean_delta_logprob"
-        )
-
-        self._log("")
-        self._log(
-            f"  {'Value':<35} {'Base Acc':>9} {'Steer Acc':>10} "
-            f"{'Δ Acc':>7} {'Δ':>9}"
-        )
-        self._log("  " + "-" * 75)
-        for value in self.values:
-            if value not in per_value:
-                continue
-            m = per_value[value]
-            self._log(
-                f"  {value:<35} {m['accuracy_baseline']:>9.1%} "
-                f"{m['accuracy_steered']:>10.1%} "
-                f"{m['delta_accuracy']:>+7.1%} "
-                f"{m.get(delta_key, 0):>+9.4f}"
-            )
-        self._log("  " + "-" * 75)
-        o = overall
-        self._log(
-            f"  {'OVERALL':<35} {o['accuracy_baseline']:>9.1%} "
-            f"{o['accuracy_steered']:>10.1%} "
-            f"{o['delta_accuracy']:>+7.1%} "
-            f"{o.get(delta_key, 0):>+9.4f}\n"
-        )
-
-        eval_path = os.path.join(
-            self.config.output_dir, "steering_eval_metrics.json"
-        )
-        with open(eval_path, "w") as f:
-            json.dump(eval_payload, f, indent=2)
-        self._log(f"  Saved evaluation metrics → {eval_path}")
-
-        self._plot_eval_accuracy(per_value, overall, eval_metric)
-
-        return eval_payload
-
-    def _plot_eval_accuracy(
-        self,
-        per_value: Dict[str, dict],
-        overall: dict,
-        eval_metric: Optional[str] = None,
-    ):
-        """Grouped bar chart comparing baseline vs steered accuracy."""
-        eval_metric = eval_metric or self.config.eval_metric
-        labels = [v for v in self.values if v in per_value]
-        if not labels:
-            return
-
-        base_accs = [per_value[v]["accuracy_baseline"] for v in labels]
-        steer_accs = [per_value[v]["accuracy_steered"] for v in labels]
-
-        x = np.arange(len(labels))
-        width = 0.35
-
-        fig, ax = plt.subplots(figsize=(max(12, len(labels) * 0.9), 6))
-        bars1 = ax.bar(x - width / 2, base_accs, width, label="Baseline",
-                       color="#90CAF9", edgecolor="#1565C0")
-        bars2 = ax.bar(x + width / 2, steer_accs, width, label="Steered",
-                       color="#A5D6A7", edgecolor="#2E7D32")
-
-        ax.axhline(y=0.5, color="gray", linestyle="--", alpha=0.5,
-                   label="Chance (50%)")
-        ax.set_ylabel("Accuracy (positive preferred)")
-        ax.set_title(
-            f"Steering Evaluation — {schwartz_eval.eval_metric_label(eval_metric)}\n"
-            f"(α={self.config.alpha}, overall: "
-            f"{overall['accuracy_baseline']:.1%} → {overall['accuracy_steered']:.1%})"
-        )
-        ax.set_xticks(x)
-        short_labels = [v.split(":")[-1].strip() if ":" in v else v
-                        for v in labels]
-        ax.set_xticklabels(short_labels, rotation=45, ha="right", fontsize=9)
-        ax.set_ylim(0, 1.05)
-        ax.legend(loc="upper left")
-        ax.grid(axis="y", alpha=0.3)
-
-        plt.tight_layout()
-        out_path = os.path.join(
-            self.config.output_dir, "steering_eval_accuracy.png"
-        )
-        plt.savefig(out_path, dpi=300)
-        plt.close()
-        self._log(f"  Saved accuracy plot   → {out_path}")
 
     # ─── Geometry Analysis ─────────────────────────────────────────────
 
@@ -688,6 +483,7 @@ class SteeringPipeline:
 
     @staticmethod
     def _group_legend_handles():
+        """Create legend handles for higher-order groups."""
         return [
             Line2D(
                 [0],
@@ -705,6 +501,7 @@ class SteeringPipeline:
 
     @classmethod
     def _add_group_legend(cls, ax) -> None:
+        """Add group legend to axes."""
         legend = ax.legend(
             handles=cls._group_legend_handles(),
             loc="upper right",
@@ -712,7 +509,7 @@ class SteeringPipeline:
             framealpha=0.94,
             facecolor="white",
             edgecolor="lightgray",
-            fontsize=12,
+            fontsize=PLOT_LEGEND_FONTSIZE,
             borderpad=0.5,
             labelspacing=0.45,
             handletextpad=0.6,
@@ -720,7 +517,8 @@ class SteeringPipeline:
         ax.add_artist(legend)
 
     @staticmethod
-    def _draw_value_marker(ax, x: float, y: float, value: str, radius: float = 0.055) -> None:
+    def _draw_value_marker(ax, x: float, y: float, value: str, radius: float = PLOT_MARKER_RADIUS) -> None:
+        """Draw a value marker (circle or split wedge for boundary values)."""
         if value in BOUNDARY_GROUPS:
             left_group, right_group = BOUNDARY_GROUPS[value]
             ax.add_patch(Wedge((x, y), radius, 90, 270, facecolor=GROUP_COLORS[left_group], edgecolor="none", zorder=3))
@@ -740,29 +538,29 @@ class SteeringPipeline:
             )
         )
 
-    @staticmethod
-    def _plot_embedding_2d(out_path: str, title: str, coords: np.ndarray):
+    @classmethod
+    def _plot_embedding_2d(cls, out_path: str, title: str, coords: np.ndarray):
         """Scatter plot of a 2-D embedding, coloured by Schwartz higher-order group."""
-        plt.figure(figsize=(14, 11))
+        plt.figure(figsize=EMBEDDING_FIGURE_SIZE)
         for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
             group = value_to_group(val)
             color = GROUP_COLORS.get(group, "black")
-            plt.scatter(coords[i, 0], coords[i, 1], c=color, s=150, edgecolors="white", linewidths=1.2)
+            plt.scatter(coords[i, 0], coords[i, 1], c=color, s=PLOT_SCATTER_SIZE, edgecolors="white", linewidths=1.2)
             plt.annotate(
-                val.split(":")[-1].strip(),
+                cls._short_value_label(val),
                 (coords[i, 0], coords[i, 1]),
                 xytext=(7, 7),
                 textcoords="offset points",
-                fontsize=13,
+                fontsize=PLOT_LABEL_FONTSIZE,
                 fontweight="semibold",
                 color=color,
                 bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.75),
             )
 
-        plt.legend(handles=SteeringPipeline._group_legend_handles(), loc="best", fontsize=13)
-        plt.title(title, fontsize=18)
-        plt.xticks(fontsize=12)
-        plt.yticks(fontsize=12)
+        plt.legend(handles=cls._group_legend_handles(), loc="best", fontsize=PLOT_LEGEND_FONTSIZE)
+        plt.title(title, fontsize=PLOT_TITLE_FONTSIZE)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE)
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(out_path, dpi=300)
         plt.close()
@@ -851,16 +649,16 @@ class SteeringPipeline:
         # ── 4. Heatmaps ──────────────────────────────────────────────
 
         # 4a. Original empirical heatmap (fixed range [-1, 1])
-        plt.figure(figsize=(14, 12))
+        plt.figure(figsize=HEATMAP_FIGURE_SIZE)
         sns.heatmap(
             empirical_sim,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             cmap="coolwarm", vmin=-1, vmax=1,
         )
-        plt.title("Empirical Cosine Similarities", fontsize=18)
-        plt.xticks(fontsize=10, rotation=45, ha="right")
-        plt.yticks(fontsize=10)
+        plt.title("Empirical Cosine Similarities", fontsize=PLOT_TITLE_FONTSIZE)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap.png"), dpi=300)
         plt.close()
@@ -871,7 +669,7 @@ class SteeringPipeline:
         vmin_auto = off_diag_vals.min()
         vmax_auto = off_diag_vals.max()
 
-        plt.figure(figsize=(14, 12))
+        plt.figure(figsize=HEATMAP_FIGURE_SIZE)
         sns.heatmap(
             empirical_sim,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
@@ -882,10 +680,10 @@ class SteeringPipeline:
         plt.title(
             f"Empirical Cosine Similarities (contrast-enhanced)\n"
             f"color range: [{vmin_auto:.3f}, {vmax_auto:.3f}]",
-            fontsize=18,
+            fontsize=PLOT_TITLE_FONTSIZE,
         )
-        plt.xticks(fontsize=10, rotation=45, ha="right")
-        plt.yticks(fontsize=10)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_enhanced.png"), dpi=300)
         plt.close()
@@ -896,7 +694,7 @@ class SteeringPipeline:
         rank_matrix[off_diag_mask] = rank_vals / rank_vals.max()  # normalize to [0,1]
         np.fill_diagonal(rank_matrix, 1.0)  # diagonal = max similarity
 
-        plt.figure(figsize=(14, 12))
+        plt.figure(figsize=HEATMAP_FIGURE_SIZE)
         sns.heatmap(
             rank_matrix,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
@@ -904,23 +702,23 @@ class SteeringPipeline:
             cmap="coolwarm",
             vmin=0, vmax=1,
         )
-        plt.title("Empirical Similarity (rank-transformed, 0=least similar, 1=most)", fontsize=18)
-        plt.xticks(fontsize=10, rotation=45, ha="right")
-        plt.yticks(fontsize=10)
+        plt.title("Empirical Similarity (rank-transformed, 0=least similar, 1=most)", fontsize=PLOT_TITLE_FONTSIZE)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "empirical_similarity_heatmap_ranked.png"), dpi=300)
         plt.close()
 
-        plt.figure(figsize=(14, 12))
+        plt.figure(figsize=HEATMAP_FIGURE_SIZE)
         sns.heatmap(
             theoretical_sim,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             yticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
             cmap="coolwarm", vmin=-1, vmax=1,
         )
-        plt.title("Theoretical Relationships", fontsize=18)
-        plt.xticks(fontsize=10, rotation=45, ha="right")
-        plt.yticks(fontsize=10)
+        plt.title("Theoretical Relationships", fontsize=PLOT_TITLE_FONTSIZE)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE, rotation=45, ha="right")
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "theoretical_similarity_heatmap.png"), dpi=300)
         plt.close()
@@ -1083,49 +881,55 @@ class SteeringPipeline:
             json.dump(geometry_metrics, f, indent=2)
 
         # ── 8. MDS circumplex overlay plot ────────────────────────────
-        plt.figure(figsize=(15, 15))
+        plt.figure(figsize=MDS_FIGURE_SIZE)
         ax = plt.gca()
+        # Draw theoretical unit circle
         ax.add_patch(Circle((0, 0), 1, color="lightgray", fill=False, linestyle="--"))
 
         for i, val in enumerate(SCHWARTZ_CIRCUMPLEX_ORDER):
+            # Theoretical position on circle
             tx, ty = X_circle[i]
             ax.plot(tx, ty, "x", color="gray", markersize=9)
 
+            # Empirical position from MDS
             ex, ey = X_mds_aligned[i]
             group = value_to_group(val)
             color = GROUP_COLORS.get(group, "black")
 
+            # Draw value marker at empirical position
             self._draw_value_marker(ax, ex, ey, val)
+            # Draw line connecting theoretical to empirical
             ax.plot([tx, ex], [ty, ey], color="gray", alpha=0.3, linestyle=":")
 
-            label = val.split(":")[-1].strip()
+            # Annotate with short label
             ax.annotate(
-                label,
+                self._short_value_label(val),
                 (ex, ey),
                 xytext=(8, 8),
                 textcoords="offset points",
-                fontsize=13,
+                fontsize=PLOT_LABEL_FONTSIZE,
                 fontweight="semibold",
                 color=color,
                 bbox=dict(boxstyle="round,pad=0.18", facecolor="white", edgecolor="none", alpha=0.8),
             )
 
         self._add_group_legend(ax)
-        plt.title("2D MDS Aligned to Theoretical Circumplex", fontsize=18)
+        plt.title("2D MDS Aligned to Theoretical Circumplex", fontsize=PLOT_TITLE_FONTSIZE)
         plt.axis("equal")
+        # Set limits clearly showing unit circle
         scale = np.max(np.abs(X_mds_aligned))
         lim = max(1.2, scale * 1.2)
         plt.xlim(-lim, lim)
         plt.ylim(-lim, lim)
         plt.grid(alpha=0.2)
-        plt.xticks(fontsize=12)
-        plt.yticks(fontsize=12)
+        plt.xticks(fontsize=PLOT_AXIS_FONTSIZE)
+        plt.yticks(fontsize=PLOT_AXIS_FONTSIZE)
         plt.tight_layout()
         plt.savefig(os.path.join(out_dir, "mds_circumplex.png"), dpi=300)
         plt.close()
 
         # ── 9. Theory vs empirical scatter ────────────────────────────
-        plt.figure(figsize=(8, 5))
+        plt.figure(figsize=SCATTER_FIGURE_SIZE)
         jitter = np.random.default_rng(self.config.random_seed).normal(
             0.0, 0.03, size=len(theo_flat)
         )
@@ -1140,7 +944,7 @@ class SteeringPipeline:
         plt.close()
 
         # ── 10. Difference heatmap ────────────────────────────────────
-        plt.figure(figsize=(12, 10))
+        plt.figure(figsize=DIFFERENCE_HEATMAP_SIZE)
         sns.heatmap(
             empirical_sim - theoretical_sim,
             xticklabels=SCHWARTZ_CIRCUMPLEX_ORDER,
@@ -1168,7 +972,7 @@ class SteeringPipeline:
 
         Directory layout::
 
-            {output_dir}/{model_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}/vectors/
+            {output_dir}/{model_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}-eval_{metric}/vectors/
                 manifest.json
                 {value_name}.pt
                 {value_name}.json
@@ -1364,19 +1168,21 @@ class SteeringPipeline:
         """
         Hierarchical run directory::
 
-            {model_short_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}
+            {model_short_name}/lr_{lr}-alpha_{alpha}-layer_{layer}-max_iter_{max_iter}-train_ratio_{ratio}-eval_{metric}
 
         Example::
 
-            Qwen3.5-9B-Base/lr_0p01-alpha_40p0-layer_22-max_iter_30-train_ratio_0p005
+            Qwen3.5-9B-Base/lr_0p01-alpha_40p0-layer_22-max_iter_30-train_ratio_0p005-eval_full_logprob
         """
         model_short = self.config.model_name.split("/")[-1].replace(" ", "_")
         lr_slug = str(self.config.lr).replace(".", "p").replace("-", "neg")
         alpha_slug = str(self.config.alpha).replace(".", "p").replace("-", "neg")
+        eval_slug = self.config.eval_metric.replace("_", "-")
         run_name = (
             f"lr_{lr_slug}-alpha_{alpha_slug}-layer_{layer}-"
             f"max_iter_{self.config.max_iters}-"
-            f"train_ratio_{str(self.config.train_ratio).replace('.', 'p')}"
+            f"train_ratio_{str(self.config.train_ratio).replace('.', 'p')}-"
+            f"eval_{eval_slug}"
         )
         return os.path.join(model_short, run_name)
 
