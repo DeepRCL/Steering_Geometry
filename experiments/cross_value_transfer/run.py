@@ -83,6 +83,7 @@ if str(_PROJECT_ROOT) not in sys.path:
 from experiments.cross_value_transfer.config import TransferExperimentConfig
 from experiments.cross_value_transfer.bipo_method import BiPOMethod
 from experiments.cross_value_transfer.caa_method import CAAMethod
+from experiments.cross_value_transfer.cold_steer_method import ColdSteerMethod
 from experiments.cross_value_transfer.qwenscope_method import QwenScopeMethod
 from experiments.cross_value_transfer.sparsecaa_method import SparseCAAMethod
 from experiments.cross_value_transfer.odesteer_method import ODESteerMethod
@@ -103,6 +104,11 @@ BEST_ALPHA_BY_METHOD = {
     "spherical_steer": 0.9,
     "bipo": 10.0,
     "sparsecaa": 4.0,
+    "sas": 4.0,
+    "qwenscope": 4.0,
+    "qwen_scope": 4.0,
+    "qwenscopecaa": 4.0,
+    "qscope": 4.0,
     "odesteer": 20.0,
     "ode": 20.0,
     # Saved ODESteer vectors are already displacements at their manifest T.
@@ -400,6 +406,30 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="L2-normalize llm-steering-opt vectors before applying alpha. "
              "Default preserves native llm-steering-opt vector norms.",
     )
+    # ── COLD-Steer-specific ─────────────────────────────────────────────────
+    p.add_argument(
+        "--cold_steer_run_dir",
+        "--cold-steer-run-dir",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to the COLD-Steer run directory containing vectors/manifest.json.",
+    )
+    p.add_argument(
+        "--cold_steer_layer",
+        "--cold-steer-layer",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Layer index for COLD-Steer vectors. If omitted, infer from manifest/config.",
+    )
+    p.add_argument(
+        "--cold_steer_position",
+        "--cold-steer-position",
+        choices=["all", "last"],
+        default=None,
+        help="COLD-Steer hook position. Default: all.",
+    )
 
     # ── Evaluation ───────────────────────────────────────────────────────────
     p.add_argument(
@@ -571,6 +601,12 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.llm_steering_opt_layer = args.llm_steering_opt_layer
     if args.llm_steering_opt_normalize_vectors:
         cfg.llm_steering_opt_normalize_vectors = True
+    if args.cold_steer_run_dir is not None:
+        cfg.cold_steer_run_dir = args.cold_steer_run_dir
+    if args.cold_steer_layer is not None:
+        cfg.cold_steer_layer = args.cold_steer_layer
+    if args.cold_steer_position is not None:
+        cfg.cold_steer_position = args.cold_steer_position
     if args.eval_dataset is not None:
         cfg.eval_dataset_path = args.eval_dataset
     if args.n_eval_samples is not None:
@@ -596,14 +632,19 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
     return cfg
 
 
-def _method_alpha(method_name: str, cfg: TransferExperimentConfig) -> float:
+def _method_alpha(method_name: str, cfg: TransferExperimentConfig, method=None) -> float:
     if not cfg.use_method_default_alphas:
         return cfg.alpha
-    return BEST_ALPHA_BY_METHOD.get(method_name.lower(), cfg.alpha)
+    method_key = method_name.lower()
+    if method_key in BEST_ALPHA_BY_METHOD:
+        return BEST_ALPHA_BY_METHOD[method_key]
+    if method is not None and hasattr(method, "recommended_alpha"):
+        return float(method.recommended_alpha)
+    return cfg.alpha
 
 
 def _attach_method_alpha(method, method_name: str, cfg: TransferExperimentConfig):
-    method.alpha = _method_alpha(method_name, cfg)
+    method.alpha = _method_alpha(method_name, cfg, method)
     return method
 
 
@@ -764,12 +805,25 @@ def _build_methods(cfg: TransferExperimentConfig):
                 normalize_vectors=cfg.llm_steering_opt_normalize_vectors,
             )
             methods.append(_attach_method_alpha(method, "llm_steering_opt", cfg))
+        elif normalized_method_name in {"cold_steer", "cold-steer", "coldsteer", "cold"}:
+            if not cfg.cold_steer_run_dir:
+                raise ValueError(
+                    f"Method '{method_name}' requires --cold_steer_run_dir to be specified."
+                )
+            method = ColdSteerMethod(
+                run_dir=cfg.cold_steer_run_dir,
+                layer=cfg.cold_steer_layer,
+                model_name=cfg.model_name,
+                method_name="cold_steer",
+                position=cfg.cold_steer_position,
+            )
+            methods.append(_attach_method_alpha(method, "cold_steer", cfg))
         else:
             raise ValueError(
                 f"Unknown method '{method_name}'. "
                 "Currently supported: ['caa', 'caa_geometry', 'spherical', "
                 "'bipo', 'bipo_geometry', 'sparsecaa', 'qwenscope', "
-                "'odesteer', 'odesteer_vectors', 'llm_steering_opt']."
+                "'odesteer', 'odesteer_vectors', 'llm_steering_opt', 'cold_steer']."
             )
     return methods
 
@@ -822,6 +876,9 @@ def main(argv=None) -> None:
     print(f"  llm_opt_dir    : {cfg.llm_steering_opt_run_dir}")
     print(f"  llm_opt_layer  : {cfg.llm_steering_opt_layer!r}  (None = manifest)")
     print(f"  llm_opt_norm   : {cfg.llm_steering_opt_normalize_vectors}")
+    print(f"  cold_dir       : {cfg.cold_steer_run_dir}")
+    print(f"  cold_layer     : {cfg.cold_steer_layer!r}  (None = manifest/config)")
+    print(f"  cold_position  : {cfg.cold_steer_position}")
     print(f"  eval_dataset   : {cfg.eval_dataset_path}")
     print(f"  n_eval_samples : {cfg.n_eval_samples}")
     print(f"  eval_splits    : {cfg.eval_splits if cfg.eval_splits else 'all'}")

@@ -130,7 +130,7 @@ class TransferExperimentConfig:
     qwenscope_normalize_vectors: bool = False
     """If True, unit-normalise QwenScope persona vectors before steering.
     Defaults to False to match the original evaluator."""
-=======
+
     # ── ODESteer-specific ──────────────────────────────────────────────────
     odesteer_run_dir: str = ""
     """Optional ODESteer Schwartz output directory.  Required for
@@ -163,6 +163,17 @@ class TransferExperimentConfig:
     """If True, L2-normalise llm-steering-opt vectors before applying alpha.
     False mirrors llm-steering-opt's native evaluation, where vector norm is
     part of the learned steering vector."""
+
+    # ── COLD-Steer-specific ────────────────────────────────────────────────
+    cold_steer_run_dir: str = ""
+    """Path to the COLD-Steer Schwartz run directory containing
+    ``vectors/manifest.json`` and usually ``config.json``."""
+
+    cold_steer_layer: Optional[int] = None
+    """Layer index for COLD-Steer vectors. If None, infer from manifest/config."""
+
+    cold_steer_position: str = "all"
+    """COLD-Steer hook position: ``"all"`` or ``"last"``."""
 
     # ── Evaluation dataset ─────────────────────────────────────────────────
     eval_dataset_path: str = (
@@ -273,6 +284,9 @@ class TransferExperimentConfig:
             llm_steering_opt_run_dir=abs_if_relative(self.llm_steering_opt_run_dir),
             llm_steering_opt_layer=self.llm_steering_opt_layer,
             llm_steering_opt_normalize_vectors=self.llm_steering_opt_normalize_vectors,
+            cold_steer_run_dir=abs_if_relative(self.cold_steer_run_dir),
+            cold_steer_layer=self.cold_steer_layer,
+            cold_steer_position=self.cold_steer_position,
             eval_dataset_path=abs_if_relative(self.eval_dataset_path),
             n_eval_samples=self.n_eval_samples,
             eval_splits=None if self.eval_splits is None else list(self.eval_splits),
