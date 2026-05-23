@@ -130,7 +130,7 @@ class TransferExperimentConfig:
     qwenscope_normalize_vectors: bool = False
     """If True, unit-normalise QwenScope persona vectors before steering.
     Defaults to False to match the original evaluator."""
-    
+=======
     # ── ODESteer-specific ──────────────────────────────────────────────────
     odesteer_run_dir: str = ""
     """Optional ODESteer Schwartz output directory.  Required for

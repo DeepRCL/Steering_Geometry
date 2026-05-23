@@ -1,0 +1,308 @@
+{
+  "metric": "ab_next_token",
+  "layer": 15,
+  "alpha_values": [
+    1.0,
+    2.0,
+    4.0,
+    8.0,
+    20.0
+  ],
+  "mean_baseline_accuracy": 0.4925002173858009,
+  "mean_steered_accuracy_by_alpha": {
+    "1.0": 0.49250021738580096,
+    "2.0": 0.49250021738580096,
+    "4.0": 0.5133022223983323,
+    "8.0": 0.4987174650504171,
+    "20.0": 0.49488116976675334
+  },
+  "mean_accuracy_gain_by_alpha": {
+    "1.0": 0.0,
+    "2.0": 0.0,
+    "4.0": 0.020802005012531325,
+    "8.0": 0.006217247664616082,
+    "20.0": 0.0023809523809523838
+  },
+  "best_overall_alpha_by_mean_accuracy_gain": {
+    "alpha": "4.0",
+    "mean_accuracy_gain_vs_baseline": 0.020802005012531325,
+    "mean_accuracy_at_alpha": 0.5133022223983323,
+    "mean_baseline_accuracy": 0.4925002173858009
+  },
+  "per_value_best_alpha_by_accuracy_gain": {
+    "Self-direction: thought": {
+      "baseline_accuracy": 0.6363636363636364,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.6363636363636364,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Self-direction: action": {
+      "baseline_accuracy": 0.45,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.45,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Stimulation": {
+      "baseline_accuracy": 0.35,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.35,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Hedonism": {
+      "baseline_accuracy": 0.6,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.6,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Achievement": {
+      "baseline_accuracy": 0.2962962962962963,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.2962962962962963,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Power: dominance": {
+      "baseline_accuracy": 0.3181818181818182,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.3181818181818182,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Power: resources": {
+      "baseline_accuracy": 0.4,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.4,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Face": {
+      "baseline_accuracy": 0.5789473684210527,
+      "best_alpha": "4.0",
+      "best_accuracy": 0.8421052631578947,
+      "best_accuracy_gain_vs_baseline": 0.26315789473684204
+    },
+    "Security: personal": {
+      "baseline_accuracy": 0.6521739130434783,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.6521739130434783,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Security: societal": {
+      "baseline_accuracy": 0.3157894736842105,
+      "best_alpha": "8.0",
+      "best_accuracy": 0.6842105263157895,
+      "best_accuracy_gain_vs_baseline": 0.368421052631579
+    },
+    "Tradition": {
+      "baseline_accuracy": 0.45,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.45,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Conformity: rules": {
+      "baseline_accuracy": 0.7272727272727273,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.7272727272727273,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Conformity: interpersonal": {
+      "baseline_accuracy": 0.3333333333333333,
+      "best_alpha": "4.0",
+      "best_accuracy": 0.38095238095238093,
+      "best_accuracy_gain_vs_baseline": 0.047619047619047616
+    },
+    "Humility": {
+      "baseline_accuracy": 0.47619047619047616,
+      "best_alpha": "20.0",
+      "best_accuracy": 0.5238095238095238,
+      "best_accuracy_gain_vs_baseline": 0.04761904761904767
+    },
+    "Benevolence: dependability": {
+      "baseline_accuracy": 0.47619047619047616,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.47619047619047616,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Benevolence: caring": {
+      "baseline_accuracy": 0.7083333333333334,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.7083333333333334,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Universalism: concern": {
+      "baseline_accuracy": 0.5416666666666666,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.5416666666666666,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Universalism: nature": {
+      "baseline_accuracy": 0.5714285714285714,
+      "best_alpha": "8.0",
+      "best_accuracy": 0.6190476190476191,
+      "best_accuracy_gain_vs_baseline": 0.04761904761904767
+    },
+    "Universalism: tolerance": {
+      "baseline_accuracy": 0.5789473684210527,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.5789473684210527,
+      "best_accuracy_gain_vs_baseline": 0.0
+    },
+    "Universalism: objectivity": {
+      "baseline_accuracy": 0.3888888888888889,
+      "best_alpha": "1.0",
+      "best_accuracy": 0.3888888888888889,
+      "best_accuracy_gain_vs_baseline": 0.0
+    }
+  },
+  "full_answer_mean_logprob": {
+    "metric": "full_answer_mean_logprob",
+    "layer": 15,
+    "alpha_values": [
+      1.0,
+      2.0,
+      4.0,
+      8.0,
+      20.0
+    ],
+    "mean_baseline_accuracy": 0.17036437575053132,
+    "mean_steered_accuracy_by_alpha": {
+      "1.0": 0.19061479318630342,
+      "2.0": 0.22536566630674182,
+      "4.0": 0.4177161186343109,
+      "8.0": 0.6235696275713438,
+      "20.0": 0.8272274449848821
+    },
+    "mean_accuracy_gain_by_alpha": {
+      "1.0": 0.020250417435772126,
+      "2.0": 0.05500129055621047,
+      "4.0": 0.24735174288377954,
+      "8.0": 0.45320525182081256,
+      "20.0": 0.6568630692343507
+    },
+    "best_overall_alpha_by_mean_accuracy_gain": {
+      "alpha": "20.0",
+      "mean_accuracy_gain_vs_baseline": 0.6568630692343507,
+      "mean_accuracy_at_alpha": 0.8272274449848821,
+      "mean_baseline_accuracy": 0.17036437575053132
+    },
+    "per_value_best_alpha_by_accuracy_gain": {
+      "Self-direction: thought": {
+        "baseline_accuracy": 0.22727272727272727,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.8181818181818182,
+        "best_accuracy_gain_vs_baseline": 0.5909090909090909
+      },
+      "Self-direction: action": {
+        "baseline_accuracy": 0.05,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.75,
+        "best_accuracy_gain_vs_baseline": 0.7
+      },
+      "Stimulation": {
+        "baseline_accuracy": 0.15,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.85,
+        "best_accuracy_gain_vs_baseline": 0.7
+      },
+      "Hedonism": {
+        "baseline_accuracy": 0.2,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.95,
+        "best_accuracy_gain_vs_baseline": 0.75
+      },
+      "Achievement": {
+        "baseline_accuracy": 0.25925925925925924,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.7037037037037037,
+        "best_accuracy_gain_vs_baseline": 0.4444444444444445
+      },
+      "Power: dominance": {
+        "baseline_accuracy": 0.09090909090909091,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.8181818181818182,
+        "best_accuracy_gain_vs_baseline": 0.7272727272727273
+      },
+      "Power: resources": {
+        "baseline_accuracy": 0.25,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.85,
+        "best_accuracy_gain_vs_baseline": 0.6
+      },
+      "Face": {
+        "baseline_accuracy": 0.21052631578947367,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.9473684210526315,
+        "best_accuracy_gain_vs_baseline": 0.7368421052631579
+      },
+      "Security: personal": {
+        "baseline_accuracy": 0.17391304347826086,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.782608695652174,
+        "best_accuracy_gain_vs_baseline": 0.6086956521739131
+      },
+      "Security: societal": {
+        "baseline_accuracy": 0.21052631578947367,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.8947368421052632,
+        "best_accuracy_gain_vs_baseline": 0.6842105263157895
+      },
+      "Tradition": {
+        "baseline_accuracy": 0.25,
+        "best_alpha": "8.0",
+        "best_accuracy": 0.75,
+        "best_accuracy_gain_vs_baseline": 0.5
+      },
+      "Conformity: rules": {
+        "baseline_accuracy": 0.13636363636363635,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.9090909090909091,
+        "best_accuracy_gain_vs_baseline": 0.7727272727272727
+      },
+      "Conformity: interpersonal": {
+        "baseline_accuracy": 0.047619047619047616,
+        "best_alpha": "8.0",
+        "best_accuracy": 0.9047619047619048,
+        "best_accuracy_gain_vs_baseline": 0.8571428571428572
+      },
+      "Humility": {
+        "baseline_accuracy": 0.2857142857142857,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.7619047619047619,
+        "best_accuracy_gain_vs_baseline": 0.47619047619047616
+      },
+      "Benevolence: dependability": {
+        "baseline_accuracy": 0.14285714285714285,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.8095238095238095,
+        "best_accuracy_gain_vs_baseline": 0.6666666666666667
+      },
+      "Benevolence: caring": {
+        "baseline_accuracy": 0.125,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.7916666666666666,
+        "best_accuracy_gain_vs_baseline": 0.6666666666666666
+      },
+      "Universalism: concern": {
+        "baseline_accuracy": 0.16666666666666666,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.7916666666666666,
+        "best_accuracy_gain_vs_baseline": 0.625
+      },
+      "Universalism: nature": {
+        "baseline_accuracy": 0.047619047619047616,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.9523809523809523,
+        "best_accuracy_gain_vs_baseline": 0.9047619047619047
+      },
+      "Universalism: tolerance": {
+        "baseline_accuracy": 0.10526315789473684,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.8421052631578947,
+        "best_accuracy_gain_vs_baseline": 0.7368421052631579
+      },
+      "Universalism: objectivity": {
+        "baseline_accuracy": 0.2777777777777778,
+        "best_alpha": "20.0",
+        "best_accuracy": 0.6666666666666666,
+        "best_accuracy_gain_vs_baseline": 0.38888888888888884
+      }
+    }
+  }
+}

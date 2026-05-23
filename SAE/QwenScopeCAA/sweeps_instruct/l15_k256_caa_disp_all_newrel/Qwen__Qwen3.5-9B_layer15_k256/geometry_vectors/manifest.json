@@ -1,0 +1,30 @@
+{
+  "geometry_vector": "displacement",
+  "geometry_alpha": 4.0,
+  "geometry_source": "all",
+  "layer": 15,
+  "use_pre_topk_personas": true,
+  "use_delta_correction": true,
+  "vectors": {
+    "Self-direction: thought": "Self-direction__thought.pt",
+    "Self-direction: action": "Self-direction__action.pt",
+    "Stimulation": "Stimulation.pt",
+    "Hedonism": "Hedonism.pt",
+    "Achievement": "Achievement.pt",
+    "Power: dominance": "Power__dominance.pt",
+    "Power: resources": "Power__resources.pt",
+    "Face": "Face.pt",
+    "Security: personal": "Security__personal.pt",
+    "Security: societal": "Security__societal.pt",
+    "Tradition": "Tradition.pt",
+    "Conformity: rules": "Conformity__rules.pt",
+    "Conformity: interpersonal": "Conformity__interpersonal.pt",
+    "Humility": "Humility.pt",
+    "Benevolence: dependability": "Benevolence__dependability.pt",
+    "Benevolence: caring": "Benevolence__caring.pt",
+    "Universalism: concern": "Universalism__concern.pt",
+    "Universalism: nature": "Universalism__nature.pt",
+    "Universalism: tolerance": "Universalism__tolerance.pt",
+    "Universalism: objectivity": "Universalism__objectivity.pt"
+  }
+}

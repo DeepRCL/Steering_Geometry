@@ -37,3 +37,4 @@ experiments/cross_value_transfer/outputs/
 experiments/cross_value_transfer/outputs*/
 experiments/cross_value_transfer/outputs_final200/
 SAE/QwenScopeCAA/bad/
+SAE/QwenScopeCAA/sweeps/
