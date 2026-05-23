@@ -33,7 +33,6 @@ Evaluate SphericalSteer with its native geodesic hook:
         --methods spherical \\
         --alpha 0.9
 
-<<<<<<< HEAD
 Evaluate BiPO / optimized vectors with their additive pre-hook:
 
     python experiments/cross_value_transfer/run.py \\
@@ -54,13 +53,12 @@ Evaluate QwenScopeCAA:
         --qwenscope_run_dir SAE/QwenScopeCAA/outputs_qwenscope_l15_k100_final_20260520_1838051/Qwen__Qwen3.5-9B-Base_layer15_k100 \\
         --methods qwenscope \\
         --alpha 4.0
-=======
+
 Fit and evaluate ODESteer with its native nonlinear hook:
 
     python experiments/cross_value_transfer/run.py \\
         --model_name Qwen/Qwen3.5-9B-Base \\
         --methods odesteer
->>>>>>> 897e0f8ebb2f63ae425742d5af16c6246f50e83d
 
 Load a saved config JSON (individual flags override it):
 
@@ -85,13 +83,10 @@ if str(_PROJECT_ROOT) not in sys.path:
 from experiments.cross_value_transfer.config import TransferExperimentConfig
 from experiments.cross_value_transfer.bipo_method import BiPOMethod
 from experiments.cross_value_transfer.caa_method import CAAMethod
-<<<<<<< HEAD
 from experiments.cross_value_transfer.qwenscope_method import QwenScopeMethod
 from experiments.cross_value_transfer.sparsecaa_method import SparseCAAMethod
-=======
 from experiments.cross_value_transfer.odesteer_method import ODESteerMethod
 from experiments.cross_value_transfer.llm_steering_opt_method import LLMSteeringOptMethod
->>>>>>> 897e0f8ebb2f63ae425742d5af16c6246f50e83d
 from experiments.cross_value_transfer.spherical_method import SphericalSteerMethod
 from experiments.cross_value_transfer.run_transfer_experiment import (
     recompute_metrics_from_saved_results,
@@ -234,7 +229,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
              "spherical_run_dir/config.json.",
     )
 
-<<<<<<< HEAD
     # ── BiPO / optimized-vector-specific ────────────────────────────────────
     p.add_argument(
         "--bipo_run_dir",
@@ -348,7 +342,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=False,
         help="Unit-normalise QwenScope vectors before steering. By default raw "
              "persona-vector magnitudes are preserved.",
-=======
+    )
+
     # ── ODESteer-specific ───────────────────────────────────────────────────
     p.add_argument(
         "--odesteer_run_dir",
@@ -404,7 +399,6 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         default=False,
         help="L2-normalize llm-steering-opt vectors before applying alpha. "
              "Default preserves native llm-steering-opt vector norms.",
->>>>>>> 897e0f8ebb2f63ae425742d5af16c6246f50e83d
     )
 
     # ── Evaluation ───────────────────────────────────────────────────────────
@@ -523,7 +517,6 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.spherical_beta = args.spherical_beta
     if args.spherical_steer_position is not None:
         cfg.spherical_steer_position = args.spherical_steer_position
-<<<<<<< HEAD
     if args.bipo_run_dir is not None:
         cfg.bipo_run_dir = args.bipo_run_dir
     if args.bipo_layer is not None:
@@ -552,7 +545,6 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.qwenscope_vector_source = args.qwenscope_vector_source
     if args.qwenscope_normalize_vectors:
         cfg.qwenscope_normalize_vectors = True
-=======
     if args.odesteer_run_dir is not None:
         cfg.odesteer_run_dir = args.odesteer_run_dir
     if args.odesteer_layer is not None:
@@ -579,7 +571,6 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.llm_steering_opt_layer = args.llm_steering_opt_layer
     if args.llm_steering_opt_normalize_vectors:
         cfg.llm_steering_opt_normalize_vectors = True
->>>>>>> 897e0f8ebb2f63ae425742d5af16c6246f50e83d
     if args.eval_dataset is not None:
         cfg.eval_dataset_path = args.eval_dataset
     if args.n_eval_samples is not None:
@@ -666,8 +657,7 @@ def _build_methods(cfg: TransferExperimentConfig):
                 beta=cfg.spherical_beta,
                 steer_position=cfg.spherical_steer_position,
             )
-<<<<<<< HEAD
-            methods.append(method)
+            methods.append(_attach_method_alpha(method, "spherical", cfg))
         elif normalized_method_name in {"bipo", "opt", "optimized"}:
             if not cfg.bipo_run_dir:
                 raise ValueError(
@@ -687,7 +677,7 @@ def _build_methods(cfg: TransferExperimentConfig):
                 normalize_vectors=cfg.bipo_normalize_vectors,
                 vector_source=cfg.bipo_vector_source,
             )
-            methods.append(method)
+            methods.append(_attach_method_alpha(method, output_method_name, cfg))
         elif normalized_method_name in {"bipo_geometry", "bipo_geometry_vectors"}:
             if not cfg.bipo_run_dir:
                 raise ValueError(
@@ -702,7 +692,7 @@ def _build_methods(cfg: TransferExperimentConfig):
                 normalize_vectors=cfg.bipo_normalize_vectors,
                 vector_source="geometry_vectors",
             )
-            methods.append(method)
+            methods.append(_attach_method_alpha(method, "bipo_geometry", cfg))
         elif normalized_method_name in {"sparsecaa", "sparse_caa", "sas"}:
             if not cfg.sparsecaa_run_dir:
                 raise ValueError(
@@ -716,7 +706,7 @@ def _build_methods(cfg: TransferExperimentConfig):
                 sae_path=cfg.sparsecaa_sae_path,
                 normalize_vectors=cfg.sparsecaa_normalize_vectors,
             )
-            methods.append(method)
+            methods.append(_attach_method_alpha(method, "sparsecaa", cfg))
         elif normalized_method_name in {"qwenscope", "qwen_scope", "qwenscopecaa", "qscope"}:
             if not cfg.qwenscope_run_dir:
                 raise ValueError(
@@ -731,15 +721,7 @@ def _build_methods(cfg: TransferExperimentConfig):
                 vector_source=cfg.qwenscope_vector_source,
                 normalize_vectors=cfg.qwenscope_normalize_vectors,
             )
-            methods.append(method)
-        else:
-            raise ValueError(
-                f"Unknown method '{method_name}'. "
-                "Currently supported: "
-                "['caa', 'caa_geometry', 'spherical', 'bipo', 'bipo_geometry', "
-                "'sparsecaa', 'qwenscope']."
-=======
-            methods.append(_attach_method_alpha(method, "spherical", cfg))
+            methods.append(_attach_method_alpha(method, "qwenscope", cfg))
         elif normalized_method_name in {"odesteer", "ode"}:
             method = ODESteerMethod(
                 config=cfg,
@@ -786,8 +768,8 @@ def _build_methods(cfg: TransferExperimentConfig):
             raise ValueError(
                 f"Unknown method '{method_name}'. "
                 "Currently supported: ['caa', 'caa_geometry', 'spherical', "
+                "'bipo', 'bipo_geometry', 'sparsecaa', 'qwenscope', "
                 "'odesteer', 'odesteer_vectors', 'llm_steering_opt']."
->>>>>>> 897e0f8ebb2f63ae425742d5af16c6246f50e83d
             )
     return methods
 
@@ -815,7 +797,6 @@ def main(argv=None) -> None:
     print(f"  spherical_kappa: {cfg.spherical_kappa!r}  (None = run config)")
     print(f"  spherical_beta : {cfg.spherical_beta!r}  (None = run config)")
     print(f"  spherical_pos  : {cfg.spherical_steer_position!r}  (None = run config)")
-<<<<<<< HEAD
     print(f"  bipo_run_dir   : {cfg.bipo_run_dir}")
     print(f"  bipo_layer     : {cfg.bipo_layer!r}  (None = auto-discover)")
     print(f"  bipo_pos       : {cfg.bipo_steer_position!r}  (None = run config)")
@@ -830,7 +811,6 @@ def main(argv=None) -> None:
     print(f"  qwenscope_sae  : {cfg.qwenscope_sae_path!r}  (None = run dir)")
     print(f"  qwenscope_vec  : {cfg.qwenscope_vector_source}")
     print(f"  qwenscope_norm : {cfg.qwenscope_normalize_vectors}")
-=======
     print(f"  odesteer_dir   : {cfg.odesteer_run_dir}")
     print(f"  odesteer_layer : {cfg.odesteer_layer!r}")
     print(f"  odesteer_type  : {cfg.odesteer_type}")
@@ -842,7 +822,6 @@ def main(argv=None) -> None:
     print(f"  llm_opt_dir    : {cfg.llm_steering_opt_run_dir}")
     print(f"  llm_opt_layer  : {cfg.llm_steering_opt_layer!r}  (None = manifest)")
     print(f"  llm_opt_norm   : {cfg.llm_steering_opt_normalize_vectors}")
->>>>>>> 897e0f8ebb2f63ae425742d5af16c6246f50e83d
     print(f"  eval_dataset   : {cfg.eval_dataset_path}")
     print(f"  n_eval_samples : {cfg.n_eval_samples}")
     print(f"  eval_splits    : {cfg.eval_splits if cfg.eval_splits else 'all'}")

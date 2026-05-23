@@ -1,0 +1,222 @@
+{
+  "Self-direction: thought": {
+    "n_train": 204,
+    "n_eval": 22,
+    "vec_norm": 19.730863571166992,
+    "n_positive_features": 38918,
+    "n_negative_features": 26618,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Self-direction: action": {
+    "n_train": 188,
+    "n_eval": 20,
+    "vec_norm": 21.49981117248535,
+    "n_positive_features": 39630,
+    "n_negative_features": 25906,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Stimulation": {
+    "n_train": 188,
+    "n_eval": 20,
+    "vec_norm": 21.577003479003906,
+    "n_positive_features": 38561,
+    "n_negative_features": 26975,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Hedonism": {
+    "n_train": 185,
+    "n_eval": 20,
+    "vec_norm": 24.72809600830078,
+    "n_positive_features": 37195,
+    "n_negative_features": 28341,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Achievement": {
+    "n_train": 249,
+    "n_eval": 27,
+    "vec_norm": 20.010793685913086,
+    "n_positive_features": 38899,
+    "n_negative_features": 26637,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Power: dominance": {
+    "n_train": 201,
+    "n_eval": 22,
+    "vec_norm": 22.045166015625,
+    "n_positive_features": 38662,
+    "n_negative_features": 26874,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Power: resources": {
+    "n_train": 187,
+    "n_eval": 20,
+    "vec_norm": 22.236719131469727,
+    "n_positive_features": 38669,
+    "n_negative_features": 26867,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Face": {
+    "n_train": 178,
+    "n_eval": 19,
+    "vec_norm": 25.104671478271484,
+    "n_positive_features": 41459,
+    "n_negative_features": 24077,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Security: personal": {
+    "n_train": 212,
+    "n_eval": 23,
+    "vec_norm": 21.11641502380371,
+    "n_positive_features": 37957,
+    "n_negative_features": 27579,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Security: societal": {
+    "n_train": 175,
+    "n_eval": 19,
+    "vec_norm": 25.45485496520996,
+    "n_positive_features": 39425,
+    "n_negative_features": 26111,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Tradition": {
+    "n_train": 188,
+    "n_eval": 20,
+    "vec_norm": 21.214134216308594,
+    "n_positive_features": 37851,
+    "n_negative_features": 27685,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Conformity: rules": {
+    "n_train": 200,
+    "n_eval": 22,
+    "vec_norm": 22.279245376586914,
+    "n_positive_features": 40095,
+    "n_negative_features": 25441,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Conformity: interpersonal": {
+    "n_train": 193,
+    "n_eval": 21,
+    "vec_norm": 25.30180549621582,
+    "n_positive_features": 40051,
+    "n_negative_features": 25485,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Humility": {
+    "n_train": 194,
+    "n_eval": 21,
+    "vec_norm": 23.501169204711914,
+    "n_positive_features": 40657,
+    "n_negative_features": 24879,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Benevolence: dependability": {
+    "n_train": 190,
+    "n_eval": 21,
+    "vec_norm": 20.920883178710938,
+    "n_positive_features": 39581,
+    "n_negative_features": 25955,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Benevolence: caring": {
+    "n_train": 223,
+    "n_eval": 24,
+    "vec_norm": 20.121906280517578,
+    "n_positive_features": 37515,
+    "n_negative_features": 28021,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Universalism: concern": {
+    "n_train": 217,
+    "n_eval": 24,
+    "vec_norm": 20.005718231201172,
+    "n_positive_features": 40030,
+    "n_negative_features": 25506,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Universalism: nature": {
+    "n_train": 198,
+    "n_eval": 21,
+    "vec_norm": 19.467252731323242,
+    "n_positive_features": 39476,
+    "n_negative_features": 26060,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Universalism: tolerance": {
+    "n_train": 179,
+    "n_eval": 19,
+    "vec_norm": 20.761842727661133,
+    "n_positive_features": 38099,
+    "n_negative_features": 27437,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  },
+  "Universalism: objectivity": {
+    "n_train": 163,
+    "n_eval": 18,
+    "vec_norm": 19.653167724609375,
+    "n_positive_features": 39244,
+    "n_negative_features": 26292,
+    "tau": 0.7,
+    "n_pos_features_above_tau": 65536,
+    "n_neg_features_above_tau": 65536,
+    "n_common_features_removed": 0
+  }
+}

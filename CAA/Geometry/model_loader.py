@@ -58,6 +58,11 @@ def load_model(model_name: str, device: str = "auto") -> ModelInfo:
             is_instruct = False
         else:
             is_instruct = tokenizer_has_chat_template
+    elif "falcon" in name_lower:
+        family = "falcon"
+        n_layers = getattr(text_config, "num_hidden_layers", getattr(model.config, "num_hidden_layers", 0))
+        hidden_dim = getattr(text_config, "hidden_size", getattr(model.config, "hidden_size", 0))
+        is_instruct = "instruct" in name_lower
     else:
         # Fallback based on config
         family = "unknown"
@@ -98,5 +103,11 @@ def get_decoder_layers(model_info: ModelInfo) -> list:
             return language_model.model.layers
     elif hasattr(model_info.model, "layers"):
         return model_info.model.layers
+    # Falcon, GPT-2, and similar models expose blocks under `transformer.h`.
+    elif hasattr(model_info.model, "transformer") and hasattr(model_info.model.transformer, "h"):
+        return model_info.model.transformer.h
+    # GPT-NeoX uses `gpt_neox.layers`.
+    elif hasattr(model_info.model, "gpt_neox") and hasattr(model_info.model.gpt_neox, "layers"):
+        return model_info.model.gpt_neox.layers
     else:
         raise ValueError(f"Could not find decoder layers in model. Available attributes: {dir(model_info.model)}")
