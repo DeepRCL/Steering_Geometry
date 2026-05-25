@@ -4,7 +4,7 @@ import numpy as np
 
 methods = [
     {'label': 'Cold-Steer', 'rhoT': 0.0265, 'gain': 5.50,  'type': 'behavior'},
-    {'label': 'SAS',         'rhoT': 0.4584, 'gain': 6.86,  'type': 'distribution'},
+    {'label': 'SAS',         'rhoT': 0.5164, 'gain': 16.2,  'type': 'distribution'},
     {'label': 'BiPO',        'rhoT': 0.1188, 'gain': 8.87,  'type': 'behavior'},
     {'label': 'SphericalSteer', 'rhoT': 0.3962, 'gain': 9.38, 'type': 'distribution'},
     {'label': 'OPT',         'rhoT': 0.0231, 'gain': 9.60,  'type': 'behavior'},
