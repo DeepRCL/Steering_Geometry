@@ -131,6 +131,28 @@ class TransferExperimentConfig:
     """If True, unit-normalise QwenScope persona vectors before steering.
     Defaults to False to match the original evaluator."""
 
+    # ── LlamaScopeCAA-specific ──────────────────────────────────────────────
+    llamascope_run_dir: str = ""
+    """Path to the LlamaScopeCAA output directory that directly contains
+    ``sparse_vectors_caa_base/``, ``pipeline_config.json``, and
+    ``sae_finetuned_layer{layer}.pt``."""
+
+    llamascope_layer: Optional[int] = None
+    """Transformer layer whose post-layer residual stream LlamaScopeCAA hooks.
+    If None, read ``layer`` from ``{llamascope_run_dir}/pipeline_config.json``."""
+
+    llamascope_sae_path: Optional[str] = None
+    """Optional override for the Llama-Scope SAE checkpoint. If None, use the
+    run's fine-tuned SAE checkpoint."""
+
+    llamascope_vector_source: str = "auto"
+    """Which LlamaScope persona vectors to load: ``"auto"`` prefers
+    ``sparse_vectors_caa_base/`` and falls back to ``sparse_vectors/``."""
+
+    llamascope_normalize_vectors: bool = False
+    """If True, unit-normalise LlamaScope persona vectors before steering.
+    Defaults to False to match the original evaluator."""
+
     # ── ODESteer-specific ──────────────────────────────────────────────────
     odesteer_run_dir: str = ""
     """Optional ODESteer Schwartz output directory.  Required for
@@ -271,6 +293,13 @@ class TransferExperimentConfig:
             ),
             qwenscope_vector_source=self.qwenscope_vector_source,
             qwenscope_normalize_vectors=self.qwenscope_normalize_vectors,
+            llamascope_run_dir=abs_if_relative(self.llamascope_run_dir),
+            llamascope_layer=self.llamascope_layer,
+            llamascope_sae_path=(
+                None if self.llamascope_sae_path is None else abs_if_relative(self.llamascope_sae_path)
+            ),
+            llamascope_vector_source=self.llamascope_vector_source,
+            llamascope_normalize_vectors=self.llamascope_normalize_vectors,
             odesteer_run_dir=abs_if_relative(self.odesteer_run_dir),
             odesteer_layer=self.odesteer_layer,
             odesteer_type=self.odesteer_type,

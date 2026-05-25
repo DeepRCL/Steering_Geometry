@@ -84,6 +84,7 @@ from experiments.cross_value_transfer.config import TransferExperimentConfig
 from experiments.cross_value_transfer.bipo_method import BiPOMethod
 from experiments.cross_value_transfer.caa_method import CAAMethod
 from experiments.cross_value_transfer.cold_steer_method import ColdSteerMethod
+from experiments.cross_value_transfer.llamascope_method import LlamaScopeMethod
 from experiments.cross_value_transfer.qwenscope_method import QwenScopeMethod
 from experiments.cross_value_transfer.sparsecaa_method import SparseCAAMethod
 from experiments.cross_value_transfer.odesteer_method import ODESteerMethod
@@ -105,6 +106,11 @@ BEST_ALPHA_BY_METHOD = {
     "bipo": 10.0,
     "sparsecaa": 4.0,
     "sas": 4.0,
+    "llamascope": 4.0,
+    "llama_scope": 4.0,
+    "llamascopecaa": 4.0,
+    "lscope": 4.0,
+    "sas_llama": 4.0,
     "qwenscope": 4.0,
     "qwen_scope": 4.0,
     "qwenscopecaa": 4.0,
@@ -350,6 +356,48 @@ def _build_arg_parser() -> argparse.ArgumentParser:
              "persona-vector magnitudes are preserved.",
     )
 
+    # ── LlamaScopeCAA-specific ───────────────────────────────────────────────
+    p.add_argument(
+        "--llamascope_run_dir",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Path to the LlamaScopeCAA output directory containing "
+             "sparse_vectors_caa_base/, pipeline_config.json, and "
+             "sae_finetuned_layer{layer}.pt.",
+    )
+    p.add_argument(
+        "--llamascope_layer",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Layer index whose post-layer residual stream LlamaScopeCAA hooks. "
+             "If omitted, read layer from pipeline_config.json.",
+    )
+    p.add_argument(
+        "--llamascope_sae_path",
+        type=str,
+        default=None,
+        metavar="PATH",
+        help="Optional Llama-Scope SAE checkpoint override. Default: run dir's "
+             "fine-tuned SAE checkpoint.",
+    )
+    p.add_argument(
+        "--llamascope_vector_source",
+        type=str,
+        default=None,
+        choices=["auto", "sparse_vectors_caa_base", "sparse_vectors"],
+        help="Load LlamaScope SAE persona vectors. Default auto prefers "
+             "sparse_vectors_caa_base/ and falls back to sparse_vectors/.",
+    )
+    p.add_argument(
+        "--llamascope_normalize_vectors",
+        action="store_true",
+        default=False,
+        help="Unit-normalise LlamaScope vectors before steering. By default raw "
+             "persona-vector magnitudes are preserved.",
+    )
+
     # ── ODESteer-specific ───────────────────────────────────────────────────
     p.add_argument(
         "--odesteer_run_dir",
@@ -575,6 +623,16 @@ def _build_config(args: argparse.Namespace) -> TransferExperimentConfig:
         cfg.qwenscope_vector_source = args.qwenscope_vector_source
     if args.qwenscope_normalize_vectors:
         cfg.qwenscope_normalize_vectors = True
+    if args.llamascope_run_dir is not None:
+        cfg.llamascope_run_dir = args.llamascope_run_dir
+    if args.llamascope_layer is not None:
+        cfg.llamascope_layer = args.llamascope_layer
+    if args.llamascope_sae_path is not None:
+        cfg.llamascope_sae_path = args.llamascope_sae_path
+    if args.llamascope_vector_source is not None:
+        cfg.llamascope_vector_source = args.llamascope_vector_source
+    if args.llamascope_normalize_vectors:
+        cfg.llamascope_normalize_vectors = True
     if args.odesteer_run_dir is not None:
         cfg.odesteer_run_dir = args.odesteer_run_dir
     if args.odesteer_layer is not None:
@@ -763,6 +821,21 @@ def _build_methods(cfg: TransferExperimentConfig):
                 normalize_vectors=cfg.qwenscope_normalize_vectors,
             )
             methods.append(_attach_method_alpha(method, "qwenscope", cfg))
+        elif normalized_method_name in {"llamascope", "llama_scope", "llamascopecaa", "lscope", "sas_llama"}:
+            if not cfg.llamascope_run_dir:
+                raise ValueError(
+                    f"Method '{method_name}' requires --llamascope_run_dir to be specified."
+                )
+            method = LlamaScopeMethod(
+                run_dir=cfg.llamascope_run_dir,
+                layer=cfg.llamascope_layer,
+                model_name=cfg.model_name,
+                method_name="llamascope",
+                sae_path=cfg.llamascope_sae_path,
+                vector_source=cfg.llamascope_vector_source,
+                normalize_vectors=cfg.llamascope_normalize_vectors,
+            )
+            methods.append(_attach_method_alpha(method, "llamascope", cfg))
         elif normalized_method_name in {"odesteer", "ode"}:
             method = ODESteerMethod(
                 config=cfg,
@@ -822,7 +895,7 @@ def _build_methods(cfg: TransferExperimentConfig):
             raise ValueError(
                 f"Unknown method '{method_name}'. "
                 "Currently supported: ['caa', 'caa_geometry', 'spherical', "
-                "'bipo', 'bipo_geometry', 'sparsecaa', 'qwenscope', "
+                "'bipo', 'bipo_geometry', 'sparsecaa', 'qwenscope', 'llamascope', "
                 "'odesteer', 'odesteer_vectors', 'llm_steering_opt', 'cold_steer']."
             )
     return methods
@@ -865,6 +938,11 @@ def main(argv=None) -> None:
     print(f"  qwenscope_sae  : {cfg.qwenscope_sae_path!r}  (None = run dir)")
     print(f"  qwenscope_vec  : {cfg.qwenscope_vector_source}")
     print(f"  qwenscope_norm : {cfg.qwenscope_normalize_vectors}")
+    print(f"  llamascope_dir : {cfg.llamascope_run_dir}")
+    print(f"  llamascope_layer: {cfg.llamascope_layer!r}  (None = run config)")
+    print(f"  llamascope_sae : {cfg.llamascope_sae_path!r}  (None = run dir)")
+    print(f"  llamascope_vec : {cfg.llamascope_vector_source}")
+    print(f"  llamascope_norm: {cfg.llamascope_normalize_vectors}")
     print(f"  odesteer_dir   : {cfg.odesteer_run_dir}")
     print(f"  odesteer_layer : {cfg.odesteer_layer!r}")
     print(f"  odesteer_type  : {cfg.odesteer_type}")

@@ -21,6 +21,9 @@ TWTM   Theory-Weighted Transfer Magnitude — mean T[A,B] × R[A,B] over
         This is the accuracy-gain amplitude associated with theory alignment.
 
 CFS    Circumplex Fidelity Score — equal-weight normalised composite in [0,1].
+
+STS    Self-scaled Transfer Stability — compares each observed transfer T[A,B]
+       with the self-gain-scaled theoretical expectation R[A,B] × T[A,A].
 """
 from __future__ import annotations
 
@@ -237,6 +240,75 @@ def compute_theory_transfer_regression(
     }
 
 
+def compute_self_scaled_transfer_stability(
+    observed_matrix: np.ndarray,
+    R_matrix: np.ndarray,
+    self_gain_matrix: np.ndarray | None = None,
+    eps: float = 1e-8,
+) -> dict:
+    """Measure how closely observed transfer follows self-scaled theory.
+
+    For each ordered off-diagonal pair (A, B), let the self gain be the raw
+    diagonal transfer T[A,A].  The expected transfer is
+
+        Expected[A,B] = R[A,B] * T[A,A]
+
+    and the relative error is
+
+        |Observed[A,B] - Expected[A,B]| / |T[A,A]|.
+
+    The absolute denominator keeps the error non-negative even if a method has
+    a negative self-gain for some value.  Values with near-zero self gain use
+    ``eps`` as the denominator, which intentionally penalises unstable or
+    non-steering rows instead of silently dropping pairs.
+
+    For residualized stability, pass the residualized matrix as
+    ``observed_matrix`` and the raw matrix as ``self_gain_matrix``.  The current
+    residualized matrix has an undefined/zero diagonal by construction, so the
+    raw diagonal remains the self-steering scale.
+    """
+    observed = np.asarray(observed_matrix, dtype=np.float64)
+    R = np.asarray(R_matrix, dtype=np.float64)
+    self_source = observed if self_gain_matrix is None else np.asarray(self_gain_matrix, dtype=np.float64)
+    if observed.shape != R.shape or observed.shape != self_source.shape:
+        raise ValueError(
+            "observed_matrix, R_matrix, and self_gain_matrix must have the same shape; "
+            f"got {observed.shape}, {R.shape}, and {self_source.shape}."
+        )
+
+    errors = []
+    expected_values = []
+    observed_values = []
+    for i in range(observed.shape[0]):
+        self_gain = float(self_source[i, i])
+        denom = max(abs(self_gain), eps)
+        for j in range(observed.shape[1]):
+            if i == j:
+                continue
+            expected = float(R[i, j] * self_gain)
+            obs = float(observed[i, j])
+            errors.append(abs(obs - expected) / denom)
+            expected_values.append(expected)
+            observed_values.append(obs)
+
+    error_arr = np.asarray(errors, dtype=np.float64)
+    exp_stability = np.exp(-error_arr)
+    inverse_stability = 1.0 / (1.0 + error_arr)
+    return {
+        "description": (
+            "Mean stability against Expected[A,B] = R[A,B] * T[A,A], with "
+            "relative error |Observed[A,B] - Expected[A,B]| / |T[A,A]|."
+        ),
+        "n_pairs": int(error_arr.size),
+        "mean_relative_error": float(np.mean(error_arr)),
+        "median_relative_error": float(np.median(error_arr)),
+        "stability_exp_neg_error": float(np.mean(exp_stability)),
+        "stability_inverse_error": float(np.mean(inverse_stability)),
+        "mean_expected_transfer": float(np.mean(expected_values)),
+        "mean_observed_transfer": float(np.mean(observed_values)),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # METRIC 3: Adjacent–Opposite Gap (AOG)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -345,6 +417,7 @@ def compute_all_metrics(
     twtm = compute_theory_weighted_transfer_magnitude(flat_R, flat_T)
     centered_twtm = compute_centered_theory_weighted_transfer_magnitude(flat_R, flat_T)
     theory_regression = compute_theory_transfer_regression(flat_R, flat_T)
+    stability = compute_self_scaled_transfer_stability(T_matrix, R_matrix)
     cfs, ctc_norm, bmd_norm, aog_norm = compute_cfs(ctc_rho, bmd_rho, aog)
 
     out = {
@@ -363,6 +436,7 @@ def compute_all_metrics(
         "TWTM": twtm,
         "centered_TWTM": centered_twtm,
         "theory_regression": theory_regression,
+        "self_scaled_transfer_stability": stability,
         "CFS": cfs,
         "CTC_norm": ctc_norm,
         "BMD_norm": bmd_norm,
@@ -379,6 +453,11 @@ def compute_all_metrics(
         resid_twtm = compute_theory_weighted_transfer_magnitude(flat_R, flat_T_resid)
         resid_centered_twtm = compute_centered_theory_weighted_transfer_magnitude(flat_R, flat_T_resid)
         resid_theory_regression = compute_theory_transfer_regression(flat_R, flat_T_resid)
+        resid_stability = compute_self_scaled_transfer_stability(
+            T_resid,
+            R_matrix,
+            self_gain_matrix=T_matrix,
+        )
         resid_cfs, resid_ctc_norm, resid_bmd_norm, resid_aog_norm = compute_cfs(
             resid_ctc_rho,
             resid_bmd_rho,
@@ -402,6 +481,7 @@ def compute_all_metrics(
             "TWTM": resid_twtm,
             "centered_TWTM": resid_centered_twtm,
             "theory_regression": resid_theory_regression,
+            "self_scaled_transfer_stability": resid_stability,
             "CFS": resid_cfs,
             "CTC_norm": resid_ctc_norm,
             "BMD_norm": resid_bmd_norm,
