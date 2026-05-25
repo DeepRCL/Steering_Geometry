@@ -645,19 +645,30 @@ def generate_comparison_table(output_dir: Path) -> None:
             continue
         with open(metrics_path, "r") as f:
             m = json.load(f)
+        residualized = m.get("residualized", {})
         records.append(
             {
-                "method": m.get("method", method_dir.name),
+                "method": method_dir.name,
+                "reported_method": m.get("method", method_dir.name),
+                "alpha": m.get("alpha", float("nan")),
                 "CTC_rho": m.get("CTC_rho", float("nan")),
                 "BMD_rho": m.get("BMD_rho", float("nan")),
                 "AOG": m.get("AOG", float("nan")),
+                "TWTM": m.get("TWTM", float("nan")),
+                "centered_TWTM": m.get("centered_TWTM", float("nan")),
+                "theory_beta": m.get("theory_regression", {}).get("beta", float("nan")),
+                "theory_r_squared": m.get("theory_regression", {}).get("r_squared", float("nan")),
                 "CFS": m.get("CFS", float("nan")),
                 "mean_transfer": m.get("transfer_summary", {}).get("off_diagonal_mean_transfer", float("nan")),
                 "positive_fraction": m.get("transfer_summary", {}).get("off_diagonal_positive_fraction", float("nan")),
-                "resid_CTC_rho": m.get("residualized", {}).get("CTC_rho", float("nan")),
-                "resid_BMD_rho": m.get("residualized", {}).get("BMD_rho", float("nan")),
-                "resid_AOG": m.get("residualized", {}).get("AOG", float("nan")),
-                "resid_CFS": m.get("residualized", {}).get("CFS", float("nan")),
+                "resid_CTC_rho": residualized.get("CTC_rho", float("nan")),
+                "resid_BMD_rho": residualized.get("BMD_rho", float("nan")),
+                "resid_AOG": residualized.get("AOG", float("nan")),
+                "resid_TWTM": residualized.get("TWTM", float("nan")),
+                "resid_centered_TWTM": residualized.get("centered_TWTM", float("nan")),
+                "resid_theory_beta": residualized.get("theory_regression", {}).get("beta", float("nan")),
+                "resid_theory_r_squared": residualized.get("theory_regression", {}).get("r_squared", float("nan")),
+                "resid_CFS": residualized.get("CFS", float("nan")),
             }
         )
 
@@ -665,12 +676,41 @@ def generate_comparison_table(output_dir: Path) -> None:
         print("No metrics.json files found; skipping comparison table.")
         return
 
-    records.sort(key=lambda r: r["CFS"] if not np.isnan(r["CFS"]) else -999, reverse=True)
+    centered_scale = sum(
+        r["centered_TWTM"] for r in records
+        if not np.isnan(r["centered_TWTM"])
+    )
+    if abs(centered_scale) < 1e-12:
+        centered_scale = 1.0
+    resid_centered_scale = sum(
+        r["resid_centered_TWTM"] for r in records
+        if not np.isnan(r["resid_centered_TWTM"])
+    )
+    if abs(resid_centered_scale) < 1e-12:
+        resid_centered_scale = 1.0
+    for record in records:
+        record["normalized_TWTM_c"] = float(record["centered_TWTM"] / centered_scale)
+        record["resid_normalized_TWTM_c"] = float(record["resid_centered_TWTM"] / resid_centered_scale)
+
+    records.sort(
+        key=lambda r: r["resid_centered_TWTM"] if not np.isnan(r["resid_centered_TWTM"]) else -999,
+        reverse=True,
+    )
 
     with open(output_dir / "comparison_table.json", "w") as f:
         json.dump(records, f, indent=2)
 
     _plot_comparison_table(records, output_dir / "comparison_table.png")
+    plot_cross_method_binned_magnitude_profile(
+        output_dir,
+        output_dir / "binned_magnitude_profile.png",
+        residualized=False,
+    )
+    plot_cross_method_binned_magnitude_profile(
+        output_dir,
+        output_dir / "binned_magnitude_profile_residualized.png",
+        residualized=True,
+    )
     print(f"Comparison table saved to {output_dir}")
 
 
@@ -782,27 +822,27 @@ def _diverging_cell_color(
 def _plot_comparison_table(records: list, save_path: Path) -> None:
     """Render the comparison table as a matplotlib figure."""
     columns = [
-        "Method", "Mean Δ", "Pos Frac", "Raw CTC", "Raw BMD",
-        "Raw AOG", "Raw CFS", "Resid CTC", "Resid BMD", "Resid AOG", "Resid CFS",
+        "Method", "α", "Mean Δ", "TWTM-c", "Norm TWTM-c", "β",
+        "Resid Norm", "Resid β", "Resid CFS", "Resid CTC", "Resid BMD",
     ]
     null_vals = {
+        "α": 0.0,
         "Mean Δ": 0.0,
-        "Pos Frac": 0.5,
-        "Raw CTC": 0.0,
-        "Raw BMD": 0.0,
-        "Raw AOG": 0.0,
-        "Raw CFS": 0.5,
+        "TWTM-c": 0.0,
+        "Norm TWTM-c": 0.0,
+        "β": 0.0,
+        "Resid Norm": 0.0,
+        "Resid β": 0.0,
+        "Resid CFS": 0.5,
         "Resid CTC": 0.0,
         "Resid BMD": 0.0,
-        "Resid AOG": 0.0,
-        "Resid CFS": 0.5,
     }
 
     # Find best value per numeric column for bolding
     keys = [
-        "mean_transfer", "positive_fraction", "CTC_rho", "BMD_rho",
-        "AOG", "CFS", "resid_CTC_rho", "resid_BMD_rho",
-        "resid_AOG", "resid_CFS",
+        "alpha", "mean_transfer", "centered_TWTM", "normalized_TWTM_c",
+        "theory_beta", "resid_normalized_TWTM_c", "resid_theory_beta", "resid_CFS",
+        "resid_CTC_rho", "resid_BMD_rho",
     ]
     col_keys = dict(zip(columns[1:], keys))
     best = {}
@@ -823,12 +863,14 @@ def _plot_comparison_table(records: list, save_path: Path) -> None:
             row_texts.append(fmt)
 
             null = null_vals[col]
-            if col in ("Raw CTC", "Raw BMD", "Resid CTC", "Resid BMD"):
+            if col in ("Resid CTC", "Resid BMD"):
                 vmin, vmax = -1.0, 1.0
-            elif col in ("Mean Δ", "Raw AOG", "Resid AOG"):
+            elif col in ("Mean Δ", "TWTM-c", "β", "Resid β"):
                 vmin, vmax = -0.30, 0.30
-            elif col == "Pos Frac":
-                vmin, vmax = 0.0, 1.0
+            elif col in ("Norm TWTM-c", "Resid Norm"):
+                vmin, vmax = -1.0, 1.0
+            elif col == "α":
+                vmin, vmax = 0.0, max(1.0, best[col] or 1.0)
             else:  # CFS
                 vmin, vmax = 0.0, 1.0
             row_colors.append(_diverging_cell_color(val, null, vmin, vmax))
@@ -854,7 +896,7 @@ def _plot_comparison_table(records: list, save_path: Path) -> None:
     table.scale(1.2, 1.6)
 
     ax.set_title(
-        "Cross-Method Comparison (sorted by CFS ↓)",
+        "Cross-Method Comparison (sorted by residualized centered TWTM ↓)",
         fontsize=13,
         pad=10,
         y=1.02,
@@ -863,6 +905,83 @@ def _plot_comparison_table(records: list, save_path: Path) -> None:
     fig.savefig(save_path, dpi=150, bbox_inches="tight")
     plt.close(fig)
     print(f"  comparison_table.png saved: {save_path}")
+
+
+def plot_cross_method_binned_magnitude_profile(
+    output_dir: Path,
+    save_path: Path,
+    residualized: bool = False,
+) -> None:
+    """Plot mean transfer magnitude by circumplex distance for all methods."""
+    records = []
+    for method_dir in sorted(output_dir.iterdir()):
+        metrics_path = method_dir / "metrics.json"
+        if not metrics_path.exists():
+            continue
+        with open(metrics_path, "r", encoding="utf-8") as f:
+            metrics = json.load(f)
+        source = metrics.get("residualized", {}) if residualized else metrics
+        profile = source.get("binned_profile")
+        if not profile:
+            continue
+        twtm = source.get("centered_TWTM", source.get("TWTM", float("nan")))
+        beta = source.get("theory_regression", {}).get("beta", float("nan"))
+        records.append(
+            {
+                "method": method_dir.name,
+                "profile": {int(k): v for k, v in profile.items()},
+                "TWTM": twtm,
+                "beta": beta,
+            }
+        )
+
+    if not records:
+        return
+
+    records.sort(key=lambda r: r["TWTM"] if not np.isnan(r["TWTM"]) else -999, reverse=True)
+    ks = np.arange(1, 11)
+
+    fig, ax = plt.subplots(figsize=(12, 6.5))
+    cmap = plt.get_cmap("tab10")
+    for idx, record in enumerate(records):
+        means = np.array([record["profile"][k]["mean"] for k in ks], dtype=np.float64)
+        stds = np.array([record["profile"][k]["std"] for k in ks], dtype=np.float64)
+        color = cmap(idx % 10)
+        ax.plot(
+            ks,
+            means,
+            marker="o",
+            linewidth=2.0,
+            color=color,
+            label=f"{record['method']} (TWTM-c={record['TWTM']:.3f})",
+        )
+        ax.fill_between(ks, means - stds, means + stds, color=color, alpha=0.10, linewidth=0)
+
+    best = records[0]
+    cos_vals = np.cos(ks * np.pi / 10)
+    scale = best["beta"] if not np.isnan(best["beta"]) else 0.0
+    ax.plot(
+        ks,
+        scale * cos_vals,
+        linestyle="--",
+        color="#212121",
+        linewidth=2.0,
+        alpha=0.75,
+        label=f"cosine reference scaled to {best['method']} β={scale:.3f}",
+    )
+    ax.axhline(0, color="#424242", linewidth=1.0, linestyle="--", alpha=0.6)
+    ax.set_xticks(ks)
+    ax.set_xticklabels([f"k={k}\n{k*18}°" for k in ks])
+    ax.set_xlabel("Circular distance between steering value A and eval value B")
+    ax.set_ylabel("Mean Δ accuracy")
+    title_prefix = "Residualized binned magnitude profile" if residualized else "Binned magnitude profile"
+    ax.set_title(f"{title_prefix}: mean T[A,B] by Schwartz distance")
+    ax.legend(fontsize=8, loc="best")
+    ax.grid(axis="y", alpha=0.2)
+    plt.tight_layout()
+    fig.savefig(save_path, dpi=160, bbox_inches="tight")
+    plt.close(fig)
+    print(f"  binned magnitude profile saved: {save_path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

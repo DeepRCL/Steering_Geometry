@@ -14,6 +14,12 @@ BMD-ρ  Bin-wise Monotonic Decay — Spearman ρ between angular-step bins
 
 AOG    Adjacent–Opposite Gap — mean T for k ≤ 2 minus mean T for k ≥ 9.
 
+TWTM   Theory-Weighted Transfer Magnitude — mean T[A,B] × R[A,B] over
+        off-diagonal entries.  This is magnitude-sensitive.
+
+β      Theory-transfer slope from an OLS regression T[A,B] = intercept + βR[A,B].
+        This is the accuracy-gain amplitude associated with theory alignment.
+
 CFS    Circumplex Fidelity Score — equal-weight normalised composite in [0,1].
 """
 from __future__ import annotations
@@ -27,7 +33,6 @@ from .circumplex_utils import (
     CIRCUMPLEX_ORDER,
     circular_distance,
     flatten_off_diagonal,
-    get_off_diagonal_pairs,
 )
 
 _N = len(CIRCUMPLEX_ORDER)
@@ -164,6 +169,74 @@ def compute_bmd_rho(
     return bmd_rho_reported, float(pvalue), bin_means
 
 
+def compute_binned_transfer_profile(T_matrix: np.ndarray) -> Dict[int, dict]:
+    """Return magnitude profile statistics for each angular distance bin."""
+    bins: Dict[int, list] = {k: [] for k in range(1, 11)}
+    for i, va in enumerate(CIRCUMPLEX_ORDER):
+        for j, vb in enumerate(CIRCUMPLEX_ORDER):
+            if i == j:
+                continue
+            bins[circular_distance(va, vb)].append(float(T_matrix[i, j]))
+
+    profile: Dict[int, dict] = {}
+    for k, vals in bins.items():
+        arr = np.asarray(vals, dtype=np.float64)
+        profile[k] = {
+            "mean": float(np.mean(arr)),
+            "std": float(np.std(arr, ddof=1)) if len(arr) > 1 else 0.0,
+            "n": int(len(arr)),
+        }
+    return profile
+
+
+def compute_theory_weighted_transfer_magnitude(
+    flat_R: np.ndarray,
+    flat_T: np.ndarray,
+) -> float:
+    """Compute mean T[A,B] × R[A,B] over off-diagonal entries."""
+    return float(np.mean(np.asarray(flat_T, dtype=np.float64) * np.asarray(flat_R, dtype=np.float64)))
+
+
+def compute_centered_theory_weighted_transfer_magnitude(
+    flat_R: np.ndarray,
+    flat_T: np.ndarray,
+) -> float:
+    """Compute mean centered(T[A,B]) × centered(R[A,B]).
+
+    The 20-value off-diagonal circumplex R values are not exactly mean-zero.
+    This covariance-style variant removes broad generic transfer before
+    measuring theory-aligned magnitude.
+    """
+    r = np.asarray(flat_R, dtype=np.float64)
+    t = np.asarray(flat_T, dtype=np.float64)
+    return float(np.mean((t - np.mean(t)) * (r - np.mean(r))))
+
+
+def compute_theory_transfer_regression(
+    flat_R: np.ndarray,
+    flat_T: np.ndarray,
+) -> dict:
+    """Fit T = intercept + beta * R on off-diagonal entries.
+
+    beta is magnitude-sensitive: it estimates how much empirical transfer
+    changes per unit increase in theoretical relatedness.
+    """
+    x = np.asarray(flat_R, dtype=np.float64)
+    y = np.asarray(flat_T, dtype=np.float64)
+    X = np.column_stack([np.ones_like(x), x])
+    coef, *_ = np.linalg.lstsq(X, y, rcond=None)
+    fitted = X @ coef
+    resid = y - fitted
+    ss_res = float(np.sum(resid ** 2))
+    ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+    r2 = 0.0 if ss_tot <= 1e-12 else 1.0 - ss_res / ss_tot
+    return {
+        "intercept": float(coef[0]),
+        "beta": float(coef[1]),
+        "r_squared": float(r2),
+    }
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # METRIC 3: Adjacent–Opposite Gap (AOG)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -267,7 +340,11 @@ def compute_all_metrics(
 
     ctc_rho, ctc_pvalue = compute_ctc_rho(flat_R, flat_T)
     bmd_rho, bmd_pvalue, bin_means = compute_bmd_rho(T_matrix)
+    binned_profile = compute_binned_transfer_profile(T_matrix)
     aog, t_adj, t_opp = compute_aog(T_matrix)
+    twtm = compute_theory_weighted_transfer_magnitude(flat_R, flat_T)
+    centered_twtm = compute_centered_theory_weighted_transfer_magnitude(flat_R, flat_T)
+    theory_regression = compute_theory_transfer_regression(flat_R, flat_T)
     cfs, ctc_norm, bmd_norm, aog_norm = compute_cfs(ctc_rho, bmd_rho, aog)
 
     out = {
@@ -279,9 +356,13 @@ def compute_all_metrics(
         "BMD_rho": bmd_rho,
         "BMD_pvalue": bmd_pvalue,
         "bin_means": {str(k): v for k, v in bin_means.items()},
+        "binned_profile": {str(k): v for k, v in binned_profile.items()},
         "AOG": aog,
         "T_adjacent": t_adj,
         "T_opposite": t_opp,
+        "TWTM": twtm,
+        "centered_TWTM": centered_twtm,
+        "theory_regression": theory_regression,
         "CFS": cfs,
         "CTC_norm": ctc_norm,
         "BMD_norm": bmd_norm,
@@ -293,7 +374,11 @@ def compute_all_metrics(
         flat_T_resid = flatten_off_diagonal(T_resid)
         resid_ctc_rho, resid_ctc_pvalue = compute_ctc_rho(flat_R, flat_T_resid)
         resid_bmd_rho, resid_bmd_pvalue, resid_bin_means = compute_bmd_rho(T_resid)
+        resid_binned_profile = compute_binned_transfer_profile(T_resid)
         resid_aog, resid_t_adj, resid_t_opp = compute_aog(T_resid)
+        resid_twtm = compute_theory_weighted_transfer_magnitude(flat_R, flat_T_resid)
+        resid_centered_twtm = compute_centered_theory_weighted_transfer_magnitude(flat_R, flat_T_resid)
+        resid_theory_regression = compute_theory_transfer_regression(flat_R, flat_T_resid)
         resid_cfs, resid_ctc_norm, resid_bmd_norm, resid_aog_norm = compute_cfs(
             resid_ctc_rho,
             resid_bmd_rho,
@@ -310,9 +395,13 @@ def compute_all_metrics(
             "BMD_rho": resid_bmd_rho,
             "BMD_pvalue": resid_bmd_pvalue,
             "bin_means": {str(k): v for k, v in resid_bin_means.items()},
+            "binned_profile": {str(k): v for k, v in resid_binned_profile.items()},
             "AOG": resid_aog,
             "T_adjacent": resid_t_adj,
             "T_opposite": resid_t_opp,
+            "TWTM": resid_twtm,
+            "centered_TWTM": resid_centered_twtm,
+            "theory_regression": resid_theory_regression,
             "CFS": resid_cfs,
             "CTC_norm": resid_ctc_norm,
             "BMD_norm": resid_bmd_norm,
