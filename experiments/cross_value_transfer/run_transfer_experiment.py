@@ -571,9 +571,17 @@ def plot_bmd_bin(
     # y = 0 reference
     ax.axhline(0, color="#424242", linewidth=0.8, linestyle="--", alpha=0.6)
 
+    y_values = mu_values + scaled_cos + [0.0]
+    y_min = min(y_values)
+    y_max = max(y_values)
+    y_span = max(y_max - y_min, max(abs(v) for v in y_values), 0.01)
+    y_pad = 0.18 * y_span
+    ax.set_ylim(y_min - y_pad, y_max + y_pad)
+    text_offset = 0.035 * y_span
+
     # Bar value annotations
     for bar, val in zip(bars, mu_values):
-        offset = 0.002 if val >= 0 else -0.004
+        offset = text_offset if val >= 0 else -text_offset
         va = "bottom" if val >= 0 else "top"
         ax.text(
             bar.get_x() + bar.get_width() / 2,
