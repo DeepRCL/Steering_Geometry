@@ -9,7 +9,7 @@ methods = [
     {'label': 'SphericalSteer', 'rhoT': 0.3962, 'gain': 9.38, 'type': 'distribution'},
     {'label': 'OPT',         'rhoT': 0.0231, 'gain': 9.60,  'type': 'behavior'},
     {'label': 'ODESteer',    'rhoT': 0.2730, 'gain': 9.70,  'type': 'distribution'},
-    {'label': 'CAA',         'rhoT': 0.4599, 'gain': 11.74, 'type': 'distribution'},
+    {'label': 'CAA',         'rhoT': 0.4606, 'gain': 11.74, 'type': 'distribution'},
 ]
 
 color_map = {
